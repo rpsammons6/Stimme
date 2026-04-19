@@ -1,0 +1,17 @@
+# Data and Vectors (The heavy stuff)
+data/
+vectors/
+lancedb_vectors/
+*.csv
+*.xlsx
+*.zip
+
+# Environment and Keys
+.env
+venv/
+.venv/
+__pycache__/
+
+# Mac/Windows clutter
+.DS_Store
+Thumbs.db
