@@ -11,7 +11,13 @@ lancedb_vectors/
 venv/
 .venv/
 __pycache__/
+.pytest_cache/
 
 # Mac/Windows clutter
 .DS_Store
 Thumbs.db
+
+# other unnecessary files
+history/
+documentation/
+tests/

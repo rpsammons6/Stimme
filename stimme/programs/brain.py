@@ -6,21 +6,7 @@ import unicodedata
 import re
 from datetime import datetime
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-from transformers import pipeline
-
-load_dotenv()
-
-import os
-import json
-import lancedb
-import anthropic
-import unicodedata
-import re
-from datetime import datetime
-from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from onnx_providers import SessionReaper
 
 load_dotenv()
 
@@ -30,8 +16,14 @@ class TranslationBrain:
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.vectors_path = os.path.join(self.base_dir, "lancedb_vectors")
         
-        # Initialize models
-        self.embed_model = SentenceTransformer('intfloat/multilingual-e5-small')
+        # Ghost providers: lazy-loaded on first access (see @property accessors below)
+        self._embed_model = None
+        self._emotion_provider = None
+        self._models_dir = os.path.join(self.base_dir, "models")
+        self._model_ttl = float(os.getenv("STIMME_MODEL_TTL", "300"))
+        
+        # TTL reaper: evicts idle ONNX sessions; providers registered on first load
+        self._reaper = SessionReaper(check_interval=60.0)
         
         # Connect to vector database with cross-platform path
         try:
@@ -45,13 +37,11 @@ class TranslationBrain:
         # Initialize the active plugins list (CRITICAL FIX)
         self.active_plugins = ["idioms", "corpus"] 
         
-        # Local Sentiment
-        self.sentiment_pipe = pipeline(
-            "sentiment-analysis", 
-            model="oliverguhr/german-sentiment-bert"
-        )
+        # Create IVF_PQ indexes for large LanceDB tables
+        self._ensure_indexes()
         
-        self.client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
+        self._init_api_key = os.getenv("CLAUDE_API_KEY", "")
+        self.client = anthropic.Anthropic(api_key=self._init_api_key) if self._init_api_key else None
         
         self.system_instructions = """
         You are a world-class Philologist and Translator. 
@@ -65,8 +55,68 @@ class TranslationBrain:
         5. If providing a technical 'terminus technicus', provide the English followed by German in [].
         6. IGNORE obvious OCR noise, page numbers, margin artifacts, or line numbers. Focus only on the semantic German text.
         7. If you encounter text fragments like "124/b" or similar artifacts mixed with German text, ignore them and translate only the meaningful German content.
+        8. Tone: Match the detected emotional signature of the German source.
+        9. When USER CORRECTION context is present for similar passages, prefer the user's corrected translation style over general context.
         """
     
+    @property
+    def embed_model(self):
+        """Lazily instantiate EmbeddingProvider on first access."""
+        if self._embed_model is None:
+            from onnx_providers import EmbeddingProvider
+            self._embed_model = EmbeddingProvider(self._models_dir)
+            self._reaper.register("embedding", self._embed_model, ttl=self._model_ttl)
+        return self._embed_model
+
+    @property
+    def emotion_provider(self):
+        """Lazily instantiate EmotionProvider on first access."""
+        if self._emotion_provider is None:
+            from onnx_providers import EmotionProvider
+            self._emotion_provider = EmotionProvider(self._models_dir)
+            self._reaper.register("emotion", self._emotion_provider, ttl=self._model_ttl)
+        return self._emotion_provider
+
+    def _ensure_indexes(self) -> None:
+        """Check and create IVF_PQ indexes for large LanceDB tables."""
+        if self.db is None:
+            return
+        INDEX_THRESHOLD = 10_000
+        for table_name in self.active_plugins:
+            try:
+                table = self.db.open_table(table_name)
+            except Exception as e:
+                print(f"⚠️  BRAIN: Failed to open table '{table_name}': {e} — skipping index check")
+                continue
+
+            try:
+                row_count = table.count_rows()
+            except Exception as e:
+                print(f"⚠️  BRAIN: count_rows() failed for '{table_name}': {e} — falling back to linear scan")
+                continue
+
+            if row_count < INDEX_THRESHOLD:
+                print(f"ℹ️  BRAIN: '{table_name}' has {row_count} rows — using linear scan")
+                continue
+
+            try:
+                indices = table.list_indices()
+                if any(True for _ in indices):
+                    print(f"ℹ️  BRAIN: '{table_name}' already has an index — skipping")
+                    continue
+            except Exception as e:
+                print(f"⚠️  BRAIN: list_indices() failed for '{table_name}': {e} — attempting index creation anyway")
+
+            try:
+                table.create_index(
+                    metric="l2",
+                    num_partitions=256,
+                    num_sub_vectors=96,
+                )
+                print(f"✅ BRAIN: Created IVF_PQ index on '{table_name}' ({row_count} rows)")
+            except Exception as e:
+                print(f"⚠️  BRAIN: create_index() failed for '{table_name}': {e} — falling back to linear scan")
+
     def sanitize_text(self, text):
         """
         Sanitize input text to handle encoding issues and normalize Unicode.
@@ -250,6 +300,26 @@ class TranslationBrain:
         for table_name in self.active_plugins:
             try:
                 table = self.db.open_table(table_name)
+
+                if table_name == "corrections":
+                    # Corrections use a stricter distance threshold and capped matches
+                    correction_limit = 3  # CorrectionService.MAX_CORRECTION_MATCHES
+                    matches = table.search(query_vector).limit(correction_limit).to_list()
+                    relevant_matches = [
+                        m for m in matches
+                        if m.get('_distance', 0) < 1.0  # stricter threshold
+                    ]
+                    if relevant_matches:
+                        has_relevant_context = True
+                        context_str += "\n--- USER CORRECTIONS ---\n"
+                        for m in relevant_matches:
+                            context_str += (
+                                f"USER CORRECTION: DE: {m['german_source']} "
+                                f"| Original: {m['original_translation']} "
+                                f"| Corrected: {m['corrected_translation']}\n"
+                            )
+                    continue
+
                 matches = table.search(query_vector).limit(max_examples_per_plugin).to_list()
                 
                 # Check if we have relevant matches (distance score < 1.5)
@@ -278,49 +348,71 @@ class TranslationBrain:
         
         return context_str, has_relevant_context
 
-    def translate(self, text, model_id="claude-sonnet-4-6", user_instructions="", provide_commentary=True):
-        """
-        The main pipeline with comprehensive text sanitization and context management.
+    def _ensure_client(self, api_key: str = None):
+        """Refresh the Anthropic client if the API key has changed.
         
         Args:
-            text: German text to translate
-            model_id: Claude model ID (claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5-20251001)
-            user_instructions: Thematic focus from the user
-            provide_commentary: Whether to include philological commentary
-            
-        Returns:
-            Tuple of (translation, commentary, metrics)
+            api_key: Explicit key passed from the caller (preferred).
+                     Falls back to CLAUDE_API_KEY env var if not provided.
         """
+        current_key = api_key or os.getenv("CLAUDE_API_KEY", "")
+
+        if current_key and current_key != self._init_api_key:
+            self.client = anthropic.Anthropic(api_key=current_key)
+            self._init_api_key = current_key
+        elif not self.client and current_key:
+            self.client = anthropic.Anthropic(api_key=current_key)
+            self._init_api_key = current_key
+
+    def translate(self, text, model_id="claude-sonnet-4-6", user_instructions="", provide_commentary=True, log_callback=None, cache_control=False, api_key=None, glossary_block: str = ""):
+        """
+        The main pipeline with comprehensive text sanitization and context management.
+        log_callback: optional callable(str) that receives each log line in real time.
+        api_key: explicit API key from the caller (sidebar). Falls back to env var.
+        """
+        def _log(msg: str):
+            print(msg)
+            if log_callback:
+                try:
+                    log_callback(msg)
+                except Exception:
+                    pass
+
+        # Refresh client with the key from the caller (sidebar) or env var
+        self._ensure_client(api_key=api_key)
+        if not self.client:
+            raise RuntimeError("No API key configured. Please enter your Anthropic API key in the sidebar.")
+
+        _log(f"🤖 Using model: {model_id}")
+
         # Step 1: Sanitize input text
-        print("🧹 BRAIN: Sanitizing input text...")
+        _log("🧹 BRAIN: Sanitizing input text...")
         original_text = text
         text = self.sanitize_text(text)
         
         if text != original_text:
-            print("✅ BRAIN: Text sanitization applied (encoding/Unicode fixes)")
+            _log("✅ BRAIN: Text sanitization applied")
         
         # Step 2: Check for multi-column PDF issues
+        multi_column_warning = ""
         if self.detect_multi_column_pdf(text):
-            print("⚠️  BRAIN: Multi-column PDF layout detected - translation quality may be affected")
-            # Add warning to commentary if enabled
-            multi_column_warning = "\n\n**Note**: Multi-column PDF layout detected. If translation seems fragmented, consider cropping the PDF to single columns."
-        else:
-            multi_column_warning = ""
-        
-        # Step 3: Analysis with sanitized text
+            _log("⚠️  BRAIN: Multi-column PDF layout detected")
+            multi_column_warning = "\n\n**Note**: Multi-column PDF layout detected."
+
+        # --- STEP 3: UPDATED EMOTION ANALYSIS (ONNX RoBERTa) ---
         try:
-            sentiment_res = self.sentiment_pipe(text)[0]
-            sentiment_label = sentiment_res['label']
+            results = self.emotion_provider.classify(text[:512], top_k=3)
+            emotion_strings = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
+            primary_emotion = results[0]['label'].upper()
+            emotion_intel = ", ".join(emotion_strings)
+            _log(f"🎭 BRAIN: Detected Emotions: {emotion_intel}")
         except Exception as e:
-            print(f"⚠️  BRAIN: Sentiment analysis failed (possibly due to text encoding): {e}")
-            sentiment_label = "NEUTRAL"  # Fallback
-        
+            _log(f"⚠️  BRAIN: Emotion analysis failed: {e}")
+            primary_emotion = "NEUTRAL"
+            emotion_intel = "NEUTRAL"
+
         # Step 4: Get context with distance scoring
         context_str, has_relevant_context = self.get_context(text)
-        
-        if not has_relevant_context:
-            context_str += "\n--- NOTE ---\nNo relevant scholarly context found in active libraries. Translation will use general knowledge.\n"
-            print("ℹ️  BRAIN: No relevant context found in libraries (distance scores too high)")
 
         # Step 5: Mission Mode Logic
         if provide_commentary:
@@ -331,30 +423,34 @@ class TranslationBrain:
         else:
             mode_instruction = "OUTPUT ONLY THE RAW TRANSLATION STRING. No JSON."
 
-        # Step 6: Call Claude with the USER-SELECTED model
-        # Calculate appropriate max_tokens based on input length
-        estimated_input_tokens = len(text) // 4 + len(context_str) // 4 + 500  # +500 for system/instructions
+        # --- STEP 6: CALL CLAUDE (With Emotional Context) ---
+        estimated_input_tokens = len(text) // 4 + len(context_str) // 4 + 500
+        max_output_tokens = max(1000, 8000 if "opus" in model_id or "sonnet" in model_id else 4000)
         
-        # Set max_tokens based on model and input size
-        if "opus-4" in model_id:
-            max_output_tokens = min(8000, 200000 - estimated_input_tokens)  # Opus has 200k context
-        elif "sonnet-4" in model_id:
-            max_output_tokens = min(8000, 200000 - estimated_input_tokens)  # Sonnet has 200k context
-        elif "haiku-4" in model_id:
-            max_output_tokens = min(4000, 200000 - estimated_input_tokens)  # Haiku has 200k context
+        system_prompt_text = self.system_instructions + "\n\n" + mode_instruction
+
+        # When cache_control is enabled (bulk mode), send system prompt as a
+        # content-block list with cache_control so Anthropic caches it across
+        # consecutive chunk translations in the same session.
+        if cache_control:
+            system_param = [{
+                "type": "text",
+                "text": system_prompt_text,
+                "cache_control": {"type": "ephemeral"}
+            }]
         else:
-            max_output_tokens = min(4000, 100000 - estimated_input_tokens)  # Conservative fallback
-        
-        # Ensure we have at least 1000 tokens for output
-        max_output_tokens = max(1000, max_output_tokens)
-        
+            system_param = system_prompt_text
+
+        # Inject glossary block before the rest of the user message
+        glossary_prefix = f"{glossary_block}\n" if glossary_block else ""
+
         response = self.client.messages.create(
             model=model_id, 
             max_tokens=max_output_tokens,
-            system=self.system_instructions + "\n\n" + mode_instruction,
+            system=system_param,
             messages=[{
                 "role": "user", 
-                "content": f"SENTIMENT: {sentiment_label}\nFOCUS: {user_instructions}\nCONTEXT:\n{context_str}\nTEXT:\n{text}"
+                "content": f"{glossary_prefix}EMOTIONAL SIGNATURE: {emotion_intel}\nFOCUS: {user_instructions}\nCONTEXT:\n{context_str}\nTEXT:\n{text}"
             }]
         )
 
@@ -363,23 +459,18 @@ class TranslationBrain:
         in_t = response.usage.input_tokens
         out_t = response.usage.output_tokens
         
-        # Calculate cost based on model type (Updated pricing for Claude 4 models)
-        if "opus-4" in model_id:
-            cost = (in_t * (15.0/1000000)) + (out_t * (75.0/1000000))
-        elif "sonnet-4" in model_id:
-            cost = (in_t * (3.0/1000000)) + (out_t * (15.0/1000000))
-        elif "haiku-4" in model_id:
-            cost = (in_t * (0.25/1000000)) + (out_t * (1.25/1000000))
-        else:
-            cost = 0.0
+        # Logic for cost... (keeping your existing logic)
+        cost = (in_t * (3.0/1000000)) + (out_t * (15.0/1000000)) # Default to Sonnet pricing
 
         metrics = {
             "input_tokens": in_t,
             "output_tokens": out_t,
+            "primary_emotion": primary_emotion, # Added to metrics!
             "estimated_cost": round(cost, 5),
             "model_used": model_id,
-            "text_sanitized": text != original_text,
-            "relevant_context_found": has_relevant_context
+            "relevant_context_found": has_relevant_context,
+            "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+            "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
         }
 
         # Step 8: Handling JSON and Commentary

@@ -131,9 +131,22 @@ class OCREngine:
             possible_paths = [
                 r'C:\Program Files\poppler\Library\bin',
                 r'C:\Program Files\poppler\bin',
-                r'C:\poppler\bin'
+                r'C:\poppler\bin',
+                r'C:\poppler-25.12.0\Library\bin',
             ]
             
+            # Also search C:\ for any poppler-* directories
+            try:
+                import glob
+                for match in glob.glob(r'C:\poppler*\Library\bin'):
+                    if match not in possible_paths:
+                        possible_paths.append(match)
+                for match in glob.glob(r'C:\poppler*\bin'):
+                    if match not in possible_paths:
+                        possible_paths.append(match)
+            except Exception:
+                pass
+
             for path in possible_paths:
                 if os.path.exists(path):
                     self.poppler_path = path
@@ -446,12 +459,26 @@ class OCREngine:
             
             image = Image.open(file_path)
             
+            # Handle multi-frame images (e.g. multi-page TIFF) — only first frame
+            if hasattr(image, 'n_frames') and image.n_frames > 1:
+                print(f"⚠️  OCR: Multi-frame image detected ({image.n_frames} frames). Processing first frame only.")
+            
+            # Convert RGBA/P to RGB (transparency causes OCR issues)
+            if image.mode in ('RGBA', 'P', 'LA'):
+                background = Image.new('RGB', image.size, (255, 255, 255))
+                if image.mode == 'P':
+                    image = image.convert('RGBA')
+                background.paste(image, mask=image.split()[-1] if 'A' in image.mode else None)
+                image = background
+            elif image.mode != 'RGB':
+                image = image.convert('RGB')
+            
             # Use appropriate language settings for German
             if language == 'deu':
                 # Try German Fraktur + modern German
                 try:
                     text = pytesseract.image_to_string(image, lang='deu_frak+deu')
-                except:
+                except Exception:
                     # Fallback to just modern German
                     text = pytesseract.image_to_string(image, lang='deu')
             else:

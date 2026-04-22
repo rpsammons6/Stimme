@@ -1,14 +1,79 @@
 import PyPDF2
 import sys
-import os
+import time
+import queue
 from pathlib import Path
-from typing import Optional
 
 # Add the programs directory to the path so we can import OCR engine
 sys.path.append(str(Path(__file__).parent.parent.parent / "programs"))
 
+from app.services.process_worker import WorkerPool, ExtractionMessage
+
+
 class PDFImportService:
     """Service for importing and extracting text from files"""
+
+    _worker_pool = WorkerPool()
+
+    @classmethod
+    def extract_in_process(cls, task_type: str, file_path: str,
+                           progress_callback=None, cancel_callback=None,
+                           **kwargs) -> str:
+        """Submit extraction to a child process. Returns extracted text.
+
+        Polls the worker queue from the calling thread (expected to be a
+        daemon thread in HomeTab) and forwards progress messages, handles
+        timeouts, and detects worker crashes.
+        """
+        result_queue = cls._worker_pool.submit(task_type, file_path, **kwargs)
+        last_message_time = time.monotonic()
+        TIMEOUT_SECONDS = 30
+
+        while True:
+            # --- crash detection (8.5) ---
+            process = cls._worker_pool._active_process
+            if process is not None and not process.is_alive():
+                # Process died — drain any remaining messages first
+                try:
+                    msg = result_queue.get_nowait()
+                except queue.Empty:
+                    cls._worker_pool._cleanup()
+                    raise RuntimeError(
+                        "Extraction worker process crashed unexpectedly"
+                    )
+                else:
+                    # Got a message from the dead process — handle it below
+                    pass
+            else:
+                # --- poll queue with short timeout ---
+                try:
+                    msg = result_queue.get(timeout=0.1)
+                except queue.Empty:
+                    # --- timeout detection (8.4) ---
+                    if time.monotonic() - last_message_time > TIMEOUT_SECONDS:
+                        cls._worker_pool.cancel()
+                        raise RuntimeError(
+                            "Extraction worker timed out (no message for 30 seconds)"
+                        )
+                    continue
+
+            # We have a message — reset the timeout clock
+            last_message_time = time.monotonic()
+
+            if msg.msg_type == ExtractionMessage.PROGRESS:
+                if progress_callback:
+                    progress_callback(
+                        msg.data.get("message", ""),
+                        msg.data.get("progress", 0),
+                    )
+
+            elif msg.msg_type == ExtractionMessage.RESULT:
+                cls._worker_pool._cleanup()
+                return msg.data.get("text", "")
+
+            elif msg.msg_type == ExtractionMessage.ERROR:
+                cls._worker_pool._cleanup()
+                raise RuntimeError(msg.data.get("error", "Unknown extraction error"))
     
     @staticmethod
     def extract_pdf_text(file_path: str, use_ocr: bool = True, progress_callback=None, cancel_callback=None) -> str:
@@ -39,7 +104,20 @@ class PDFImportService:
             with open(file_path, 'rb') as file:
                 print(f" PDF_IMPORT: File opened successfully")  # Debug
                 pdf_reader = PyPDF2.PdfReader(file)
-                print(f" PDF_IMPORT: PDF reader created, pages: {len(pdf_reader.pages)}")  # Debug
+                
+                # Check for encryption
+                if pdf_reader.is_encrypted:
+                    try:
+                        # Try empty password (some PDFs are "encrypted" with no password)
+                        pdf_reader.decrypt("")
+                    except Exception:
+                        raise Exception("This PDF is password-protected. Please provide an unencrypted version.")
+                
+                num_pages = len(pdf_reader.pages)
+                print(f" PDF_IMPORT: PDF reader created, pages: {num_pages}")  # Debug
+                
+                if num_pages == 0:
+                    raise Exception("This PDF has no pages.")
                 
                 if progress_callback:
                     progress_callback("Attempting digital text extraction...", 10)
@@ -79,7 +157,12 @@ class PDFImportService:
                 return digital_text
             
         except Exception as e:
-            print(f" PDF_IMPORT: Exception during extraction: {e}")  # Debug
+            err_str = str(e)
+            print(f" PDF_IMPORT: Exception during extraction: {err_str}")
+            
+            # If it's a clear user-facing error, don't try OCR fallback
+            if "password-protected" in err_str.lower() or "no pages" in err_str.lower():
+                raise
             
             # If digital extraction completely failed, try OCR as last resort
             if use_ocr:
@@ -89,10 +172,17 @@ class PDFImportService:
                 try:
                     return PDFImportService._extract_with_ocr(file_path, progress_callback, cancel_callback)
                 except Exception as ocr_e:
-                    print(f" PDF_IMPORT: OCR also failed: {ocr_e}")
-                    raise Exception(f"Both digital extraction and OCR failed. Digital: {str(e)}, OCR: {str(ocr_e)}")
+                    ocr_str = str(ocr_e)
+                    print(f" PDF_IMPORT: OCR also failed: {ocr_str}")
+                    # Give a friendlier message
+                    if "poppler" in ocr_str.lower():
+                        raise Exception("PDF text extraction failed and OCR requires Poppler. Please ensure Poppler is installed.")
+                    elif "tesseract" in ocr_str.lower():
+                        raise Exception("PDF text extraction failed and OCR requires Tesseract. Please ensure Tesseract is installed.")
+                    else:
+                        raise Exception(f"Could not extract text from this PDF. Digital extraction and OCR both failed.")
             else:
-                raise Exception(f"Error extracting PDF: {str(e)}")
+                raise Exception(f"Error extracting PDF: {err_str}")
     
     @staticmethod
     def _extract_with_ocr(file_path: str, progress_callback=None, cancel_callback=None) -> str:
@@ -224,7 +314,8 @@ class PDFImportService:
     @staticmethod
     def read_text_file(file_path: str) -> str:
         """
-        Read text from .txt or .md file
+        Read text from .txt or .md file.
+        Tries UTF-8 first, falls back to Latin-1 (which never fails).
         
         Args:
             file_path: Path to text file
@@ -232,8 +323,23 @@ class PDFImportService:
         Returns:
             File contents
         """
+        # Try UTF-8 first (most common)
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+        except UnicodeDecodeError:
+            pass
+        
+        # Fallback: try UTF-8 with BOM
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as file:
+                return file.read()
+        except UnicodeDecodeError:
+            pass
+        
+        # Fallback: Latin-1 (Windows-1252 superset, never raises UnicodeDecodeError)
+        try:
+            with open(file_path, 'r', encoding='latin-1') as file:
                 return file.read()
         except Exception as e:
             raise Exception(f"Error reading file: {str(e)}")

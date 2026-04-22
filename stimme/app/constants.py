@@ -94,6 +94,27 @@ def has_api_key() -> bool:
     return bool(key and key.strip())
 
 # ============================================================================
+# BULK MODE CONSTANTS
+# ============================================================================
+
+# Book detection threshold (word count)
+BOOK_THRESHOLD = 3000
+
+# Sliding window chunker defaults (word counts)
+DEFAULT_CHUNK_SIZE = 1500
+DEFAULT_OVERLAP = 100
+
+# Scout model for structural mapping (cheap/fast)
+SCOUT_MODEL = "claude-haiku-4-5-20251001"
+
+# Per-model pricing: (input_cost_per_1M_tokens, output_cost_per_1M_tokens)
+MODEL_PRICING = {
+    "claude-opus-4-7": (15.0, 75.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5-20251001": (0.80, 4.0),
+}
+
+# ============================================================================
 # ACTIVE PLUGINS - Default Datasets
 # ============================================================================
 

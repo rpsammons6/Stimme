@@ -2,225 +2,191 @@ import flet as ft
 import threading
 import time
 import os
+import sys
 from app.shell import AppShell
-from app.theme import Colors, Fonts
-from app.components.loading_screen import LoadingScreen
+from app.theme import Colors, Fonts, UI
+from app.components.shared.loading_screen import LoadingScreen
 
 # Set BASE_DIR as anchor for all paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Global flag to track model loading
+# Global flags to track state
 models_loaded = False
 loading_screen = None
 
 def preload_models():
-    """Preload ML models in background to avoid cold start delays"""
-    global models_loaded, loading_screen
+    """Preload ML models in background to avoid cold start delays.
     
-    print("🔄 MAIN: Starting model preloading...")
-    
-    try:
-        # Import and initialize the brain (this loads the models)
-        import sys
-        programs_path = os.path.join(BASE_DIR, "programs")
-        sys.path.append(programs_path)
-        
-        if loading_screen:
-            loading_screen.update_progress("Loading sentence transformer...", 25)
-        
-        from brain import TranslationBrain
-        
-        print("  MAIN: Loading sentence transformer model...")
-        
-        if loading_screen:
-            loading_screen.update_progress("Initializing translation brain...", 50)
-        
-        brain = TranslationBrain()  # This loads SentenceTransformer and BERT
-        
-        if loading_screen:
-            loading_screen.update_progress("Models loaded successfully!", 100)
-        
-        print("✅ MAIN: Models preloaded successfully")
-        
-        models_loaded = True
-        
-    except Exception as e:
-        print(f"⚠️  MAIN: Model preloading failed: {e}")
-        if loading_screen:
-            loading_screen.update_progress("Model loading failed, continuing...", 100)
-        models_loaded = True  # Set to True anyway to not block the UI
+    NOTE: Disabled — the LLMBackendRouter lazily initializes TranslationBrain
+    on first translate() call, so preloading here just creates a throwaway
+    instance that wastes RAM and startup time.
+    """
+    global models_loaded
+    models_loaded = True
 
 def main(page: ft.Page):
     global loading_screen, models_loaded
     
     page.title = "Stimme"
-    
-    print(" MAIN: Starting Stimme app...")  # Debug
-    print(f"  MAIN: Window size will be 1200x800")  # Debug
-    
-    # Use new window API with more reasonable default size
-    page.window.min_width = 900
-    page.window.min_height = 600
-    page.window.width = 1200
-    page.window.height = 800
-    
+    page.window.min_width = 1000
+    page.window.min_height = 700
+    page.window.width = 1000
+    page.window.height = 700
     page.theme_mode = ft.ThemeMode.DARK
-    
-    # Set exact color scheme from CSS
     page.bgcolor = Colors.BACKGROUND
-    
-    # Configure fonts - using local TTF files
+    page.padding = 0
+    page.spacing = 0
+
+    # Registration of fonts
     page.fonts = {
         "CormorantGaramond": "/CormorantGaramond-Regular.ttf",
         "UnifrakturCook-Bold": "/UnifrakturCook-Bold.ttf",
-        "Lexend": "/Lexend[wght].ttf"
+        "JetBrains Mono": "/JetBrainsMono-Regular.ttf"
     }
-    
-    # Set window icon to shortcut logo
-    page.window.icon = "/Shortcut-Logo.png"
-    
-    # Create custom theme with our exact colors
+
+    # Custom theme setup
     page.theme = ft.Theme(
+        font_family="CormorantGaramond",
+        use_material3=True,
         color_scheme=ft.ColorScheme(
-            primary=Colors.PRIMARY,
-            on_primary=Colors.PRIMARY_FOREGROUND,
-            secondary=Colors.SECONDARY,
-            on_secondary=Colors.SECONDARY_FOREGROUND,
-            background=Colors.BACKGROUND,
-            on_background=Colors.FOREGROUND,
+            primary=Colors.GOLD,
             surface=Colors.SURFACE,
-            on_surface=Colors.FOREGROUND,
-            error=Colors.DESTRUCTIVE,
-            on_error=Colors.DESTRUCTIVE_FOREGROUND,
-            outline=Colors.BORDER,
-            shadow=Colors.BACKGROUND,
-            inverse_surface=Colors.FOREGROUND,
-            inverse_primary=Colors.BACKGROUND,
-        ),
-        font_family="CormorantGaramond",  # Use Cormorant Garamond as default
-        use_material3=True
+            background=Colors.BACKGROUND,
+        )
     )
     
-    # Disable padding
-    page.padding = 0
-    page.spacing = 0
-    
-    # Show loading screen while models load
+    # 1. Show the Loading Screen immediately
     loading_screen = LoadingScreen(page)
-    loading_screen.show("Loading translation models...")
+    loading_screen.show("Consulting the archives...", fullpage=True)
     
-    # Start model preloading in background
+    # 2. Start preloading models
     if not models_loaded:
         threading.Thread(target=preload_models, daemon=True).start()
     
-    # Wait for models to load or timeout after 15 seconds
-    def check_models_loaded():
-        start_time = time.time()
-        while not models_loaded and (time.time() - start_time) < 15:
-            time.sleep(0.1)
-        
-        # Hide loading screen and show main app
-        if loading_screen:
-            loading_screen.hide()
-        
-        # Create and show main app
-        app_shell = AppShell(page)
-        print("  MAIN: AppShell created")  # Debug
-        print(f" MAIN: Home tab has shell reference: {hasattr(app_shell.home_tab, 'shell')}")  # Debug
-        
-        # Set up window close handling
-        setup_window_close_handling(page, app_shell)
-        
-        page.add(app_shell.build())
-        print("✅ MAIN: App shell added to page")  # Debug
-        page.update()
-    
-    # Start app initialization in background
-    threading.Thread(target=check_models_loaded, daemon=True).start()
+    # 3. Transition to Shell
+    def initialize_app():
+        try:
+            start_time = time.time()
+            # Wait for models or 15s timeout
+            while not models_loaded and (time.time() - start_time) < 15:
+                time.sleep(0.2)
+            
+            if loading_screen:
+                loading_screen.hide()
+            
+            # Create the AppShell
+            app_shell = AppShell(page)
+            
+            # Setup the close handling
+            setup_window_close_handling(page, app_shell)
+            
+            # Add the Shell build to the page
+            page.add(app_shell.build())
+            page.update()
+            print("✅ MAIN: App initialized successfully")
+        except Exception as e:
+            print(f"❌ MAIN: Fatal error during initialization: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show a minimal error state so the user knows something went wrong
+            try:
+                if loading_screen:
+                    loading_screen.hide()
+                page.add(ft.Text(
+                    f"Stimme failed to start: {e}\nCheck the terminal for details.",
+                    color="red", size=16
+                ))
+                page.update()
+            except Exception:
+                pass
+
+    threading.Thread(target=initialize_app, daemon=True).start()
 
 def setup_window_close_handling(page: ft.Page, app_shell: AppShell):
-    """Handle window close event with confirmation"""
+    """Intercepts the 'X' button to check for unsaved work"""
+    
     def on_window_event(e):
         if e.data == "close":
-            print(" MAIN: Window close event triggered")  # Debug
-            
-            # Check if there's unsaved content using workspace manager
-            has_content = app_shell.workspace.has_unsaved_content(
-                pdf_file=app_shell.home_tab.center_panel.pdf_file
-            )
-            
-            print(f" MAIN: Has unsaved content: {has_content}")  # Debug
-            
-            if has_content:
-                print("  MAIN: Unsaved content detected, showing confirmation dialog")  # Debug
-                show_exit_confirmation(page, app_shell)
-            else:
-                print("✅ MAIN: No unsaved content, allowing exit")  # Debug
-                page.window.destroy()
+            try:
+                # Check centralized state for unsaved content
+                if app_shell.state.has_unsaved_content:
+                    show_exit_confirmation(page, app_shell)
+                else:
+                    _safe_exit(page, app_shell)
+            except Exception as ex:
+                print(f"⚠️  MAIN: Error in close handler: {ex}")
+                _safe_exit(page, app_shell)
     
-    # Set the window event handler
     page.window.on_event = on_window_event
-    page.window.prevent_close = True  # Prevent default close behavior
+    page.window.prevent_close = True
+
+
+def _safe_exit(page: ft.Page, app_shell: AppShell):
+    """Clean up resources and destroy the window."""
+    try:
+        app_shell.home_tab.cleanup()
+    except Exception:
+        pass
+    
+    try:
+        app_shell.home_tab.translation_service.cleanup()
+    except Exception:
+        pass
+    
+    try:
+        page.window.destroy()
+    except (AssertionError, Exception):
+        # Flet's internal update can fail during teardown — just force quit
+        import os
+        os._exit(0)
+
 
 def show_exit_confirmation(page: ft.Page, app_shell: AppShell):
-    """Show confirmation dialog before exiting with unsaved content"""
+    """Displays the final warning dialog"""
+    
+    def on_stay(e):
+        try:
+            exit_dialog.open = False
+            page.update()
+        except Exception:
+            pass
     
     def on_confirm_exit(e):
-        print("✅ MAIN: User confirmed exit")  # Debug
-        exit_dialog.open = False
-        page.update()
-        # Cleanup resources
-        app_shell.home_tab.cleanup()
-        page.window.destroy()
+        # Don't bother closing the dialog cleanly — just exit immediately
+        _safe_exit(page, app_shell)
     
-    def on_cancel_exit(e):
-        print("❌ MAIN: User cancelled exit")  # Debug
-        exit_dialog.open = False
-        page.update()
+    # Close any existing dialog first to prevent stomping
+    try:
+        if page.dialog and hasattr(page.dialog, 'open'):
+            page.dialog.open = False
+            page.update()
+    except Exception:
+        pass
     
     exit_dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text(
-            "Confirm Exit",
-            font_family=Fonts.HEADER,
-            weight=ft.FontWeight.W_600,
-            size=18,
-            color=Colors.FOREGROUND
-        ),
+        title=ft.Text("Unsaved Work", font_family=Fonts.HEADER),
         content=ft.Text(
-            "You have unsaved content (text or loaded PDF). Are you sure you want to exit?",
+            "You have unsaved text or a PDF loaded. Exit anyway?",
             font_family=Fonts.SERIF,
             size=14,
-            color=Colors.INK_MUTED
         ),
         actions=[
-            ft.TextButton(
-                "Cancel",
-                on_click=on_cancel_exit,
-                style=ft.ButtonStyle(
-                    color=Colors.INK_MUTED
-                )
-            ),
+            ft.TextButton("Stay", on_click=on_stay),
             ft.ElevatedButton(
-                "Exit",
+                "Exit Stimme",
                 on_click=on_confirm_exit,
-                bgcolor=Colors.DESTRUCTIVE,  # Keep red for exit
+                bgcolor=Colors.DESTRUCTIVE,
                 color=Colors.FOREGROUND,
-                style=ft.ButtonStyle(
-                    shape=ft.RoundedRectangleBorder(radius=6)
-                )
-            )
+            ),
         ],
-        actions_alignment=ft.MainAxisAlignment.END,
-        bgcolor=Colors.BACKGROUND,
-        shape=ft.RoundedRectangleBorder(radius=12)
     )
-    
     page.dialog = exit_dialog
     exit_dialog.open = True
     page.update()
 
+# This part ensures the app runs when main.py is executed
 if __name__ == "__main__":
-    # Set assets directory using BASE_DIR for cross-platform compatibility
+    # Define where the logos and fonts are stored
     assets_dir = os.path.join(BASE_DIR, "app", "assets")
     ft.app(target=main, assets_dir=assets_dir)

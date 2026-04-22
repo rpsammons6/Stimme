@@ -34,6 +34,14 @@ def build_idiom_table():
         
     db.create_table("idioms", data=data, mode="overwrite")
     print("Idiom table complete!")
+    
+    # Create ANN index for fast vector search
+    try:
+        table = db.open_table("idioms")
+        table.create_index(num_partitions=256, num_sub_vectors=96)
+        print("✅ ANN index created for idioms table")
+    except Exception as e:
+        print(f"⚠️  Could not create ANN index for idioms: {e}")
 
 
 def build_corpus_table_sample():
@@ -50,6 +58,14 @@ def build_corpus_table_sample():
             "sentiment": str(row['sentiment'])
         })
     db.create_table("corpus", data=data, mode="overwrite")
+    
+    # Create ANN index for fast vector search
+    try:
+        table = db.open_table("corpus")
+        table.create_index(num_partitions=256, num_sub_vectors=96)
+        print("✅ ANN index created for corpus table")
+    except Exception as e:
+        print(f"⚠️  Could not create ANN index for corpus: {e}")
 
 if __name__ == "__main__":
     build_idiom_table()
