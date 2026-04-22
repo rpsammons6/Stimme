@@ -1,0 +1,23 @@
+# Stimme UI Messages
+# Edit these to customize the text shown to users.
+# Format: KEY = Message text
+# Lines starting with # are comments.
+
+# --- Errors ---
+ERROR_NO_TEXT = No German text detected. Please enter or upload something first.
+ERROR_NO_API_KEY = API key missing. Open the sidebar and paste your Claude key at the bottom.
+ERROR_NOTHING_TO_EXPORT = Nothing to export. Translate something first, or check your history.
+ERROR_UPLOAD_FAILED = Upload failed. The file could not be read.
+ERROR_OCR_FAILED = OCR extraction failed. Check that Tesseract and Poppler are installed.
+ERROR_TRANSLATION_FAILED = Translation failed. Please try again.
+ERROR_SYSTEM = Something went wrong internally. Check the terminal for details.
+
+# --- Success ---
+SUCCESS_TRANSLATION = Translation complete.
+SUCCESS_EXPORT = Export saved successfully.
+SUCCESS_FILE_LOADED = File loaded: {filename}
+
+# --- Info ---
+INFO_PROCESSING = Processing, please wait...
+INFO_OCR_STARTING = Starting OCR text extraction...
+INFO_DIGITAL_EXTRACTION = Extracting text digitally...

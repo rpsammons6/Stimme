@@ -17,6 +17,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# ONNX model binaries (hosted on Hugging Face)
+*.onnx
+
 # other unnecessary files
 history/
 documentation/

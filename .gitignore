@@ -1,0 +1,13 @@
+# Root-level files and folders to exclude
+.env
+.hypothesis/
+.kiro/
+.pytest_cache/
+.venv/
+__pycache__/
+conftest.py
+dead-scripts.txt
+data/
+history/
+lancedb_vectors/
+test_view.html

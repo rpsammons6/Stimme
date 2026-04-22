@@ -1,0 +1,14 @@
+# Stimme - Development Dependencies
+# Includes all production deps plus tools for model export, testing, and development.
+
+-r requirements.txt
+
+# --- ONNX MODEL EXPORT ---
+sentence-transformers>=3.2.0    # Model loading for ONNX export
+optimum[onnxruntime]>=1.17.0    # ONNX export and quantization
+torch>=2.0.0                    # PyTorch backend for export/fallback
+transformers>=4.30.0            # HuggingFace model support
+
+# --- TESTING ---
+pytest>=7.0.0                   # Test runner
+hypothesis>=6.0.0               # Property-based testing
