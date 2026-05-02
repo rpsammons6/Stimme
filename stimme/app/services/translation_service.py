@@ -8,14 +8,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple, Optional, Dict, Any
 
 from app.constants import ERROR_NO_API_KEY
-from app.contexts.settings import SettingsManager
+from app.services.configuration_service import ConfigurationService
 from app.services.history import HistoryManager
 from app.services.llm_backend_router import LLMBackendRouter
 
 class TranslationService:
     """Service for handling translation requests"""
     
-    def __init__(self, settings: SettingsManager):
+    def __init__(self, settings: ConfigurationService):
         self.settings = settings
         self.router = LLMBackendRouter(settings)
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -42,6 +42,7 @@ class TranslationService:
         cache_control: bool = False,
         pdf_path: Optional[str] = None,
         glossary_block: str = "",
+        glossary_manager=None,
     ) -> Tuple[bool, str, Optional[str], Optional[Dict[str, Any]]]:
         """
         Translate text asynchronously.
@@ -51,6 +52,16 @@ class TranslationService:
             
         if not self.settings.has_api_key():
             return False, ERROR_NO_API_KEY, None, None
+        
+        # Pre-translate glossary save guard
+        if glossary_manager is not None and glossary_manager.is_dirty:
+            try:
+                _log = log_callback or print
+                _log("[SYSTEM]: Saving glossary before inference...")
+                glossary_manager.save()
+            except Exception as e:
+                _log_err = log_callback or print
+                _log_err(f"[SYSTEM]: Glossary save failed: {e}")
         
         try:
             model_id = self.settings.get_model()
@@ -110,6 +121,7 @@ class TranslationService:
         cache_control: bool = False,
         pdf_path: Optional[str] = None,
         glossary_block: str = "",
+        glossary_manager=None,
     ) -> Tuple[bool, str, Optional[str], Optional[Dict[str, Any]]]:
         """
         Synchronous translation for simple use cases.
@@ -119,6 +131,16 @@ class TranslationService:
             
         if not self.settings.has_api_key():
             return False, ERROR_NO_API_KEY, None, None
+        
+        # Pre-translate glossary save guard
+        if glossary_manager is not None and glossary_manager.is_dirty:
+            try:
+                _log = log_callback or print
+                _log("[SYSTEM]: Saving glossary before inference...")
+                glossary_manager.save()
+            except Exception as e:
+                _log_err = log_callback or print
+                _log_err(f"[SYSTEM]: Glossary save failed: {e}")
         
         try:
             model_id = self.settings.get_model()

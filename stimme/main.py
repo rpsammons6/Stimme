@@ -3,6 +3,7 @@ import threading
 import time
 import os
 import sys
+from pathlib import Path
 from app.shell import AppShell
 from app.theme import Colors, Fonts, UI
 from app.components.shared.loading_screen import LoadingScreen
@@ -77,6 +78,149 @@ def main(page: ft.Page):
             # Create the AppShell
             app_shell = AppShell(page)
             
+            # Check for session recovery
+            state_service = app_shell.state_service
+            recovery_data = state_service.check_recovery()
+            
+            if recovery_data:
+                # Use threading.Event to wait for user's dialog choice
+                decision_event = threading.Event()
+                user_accepted = [False]  # mutable container for closure
+                
+                def on_accept(e):
+                    user_accepted[0] = True
+                    decision_event.set()
+                    app_shell.bus.close_dialog()
+                
+                def on_decline(e):
+                    user_accepted[0] = False
+                    decision_event.set()
+                    app_shell.bus.close_dialog()
+                
+                recovery_dialog = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text("Session Recovery", font_family=Fonts.HEADER, color=Colors.GOLD),
+                    content=ft.Text(
+                        "Resume your previous session?",
+                        font_family=Fonts.SERIF,
+                        size=14,
+                        color=Colors.FOREGROUND,
+                    ),
+                    actions=[
+                        ft.TextButton(
+                            content=ft.Text("Discard", font_family=Fonts.FRAKTUR),
+                            on_click=on_decline,
+                        ),
+                        ft.ElevatedButton(
+                            content=ft.Text("Resume", font_family=Fonts.FRAKTUR, weight="bold"),
+                            on_click=on_accept,
+                            bgcolor=Colors.GOLD,
+                            color=Colors.BACKGROUND,
+                        ),
+                    ],
+                    bgcolor=Colors.SURFACE,
+                )
+                
+                # Show dialog via EventBus (thread-safe)
+                app_shell.bus.show_dialog(recovery_dialog)
+                
+                # Wait for user decision
+                decision_event.wait()
+                
+                if user_accepted[0]:
+                    # Apply recovery: replace state and rebuild
+                    restored_state = state_service.apply_recovery(recovery_data)
+                    app_shell.state = restored_state
+                    # Update StateService's internal reference to the new state
+                    state_service._state = restored_state
+                    app_shell.rebuild_tabs()
+                else:
+                    state_service.discard_recovery()
+            
+            # Check for glossary journal recovery
+            if app_shell.glossary_journal.has_entries():
+                glossary_decision_event = threading.Event()
+                glossary_accepted = [False]
+                
+                def on_glossary_accept(e):
+                    glossary_accepted[0] = True
+                    glossary_decision_event.set()
+                    app_shell.bus.close_dialog()
+                
+                def on_glossary_decline(e):
+                    glossary_accepted[0] = False
+                    glossary_decision_event.set()
+                    app_shell.bus.close_dialog()
+                
+                glossary_recovery_dialog = ft.AlertDialog(
+                    modal=True,
+                    title=ft.Text("Glossary Recovery", font_family=Fonts.HEADER, color=Colors.GOLD),
+                    content=ft.Text(
+                        "Unsaved glossary changes from your last session were found. Apply them?",
+                        font_family=Fonts.SERIF,
+                        size=14,
+                        color=Colors.FOREGROUND,
+                    ),
+                    actions=[
+                        ft.TextButton(
+                            content=ft.Text("Discard", font_family=Fonts.FRAKTUR),
+                            on_click=on_glossary_decline,
+                        ),
+                        ft.ElevatedButton(
+                            content=ft.Text("Apply", font_family=Fonts.FRAKTUR, weight="bold"),
+                            on_click=on_glossary_accept,
+                            bgcolor=Colors.GOLD,
+                            color=Colors.BACKGROUND,
+                        ),
+                    ],
+                    bgcolor=Colors.SURFACE,
+                )
+                
+                app_shell.bus.show_dialog(glossary_recovery_dialog)
+                glossary_decision_event.wait()
+                
+                if glossary_accepted[0]:
+                    entries = app_shell.glossary_journal.read_entries()
+                    glossary_paths_checked = {}
+                    
+                    for entry in entries:
+                        glossary_path = entry.glossary_path
+                        
+                        # Cache path existence checks
+                        if glossary_path not in glossary_paths_checked:
+                            glossary_paths_checked[glossary_path] = Path(glossary_path).exists()
+                        
+                        if not glossary_paths_checked[glossary_path]:
+                            app_shell.bus.show_banner(
+                                f"Error: Glossary not found at {glossary_path}",
+                                is_error=True,
+                            )
+                            continue
+                        
+                        if entry.operation == "add":
+                            term_data = entry.term_data
+                            app_shell.glossary_manager.add_term(
+                                german=term_data.get("german", ""),
+                                english=term_data.get("english", ""),
+                                context_target=term_data.get("context_target", ""),
+                                field_tag=term_data.get("field_tag", ""),
+                                nuance_note=term_data.get("nuance_note", ""),
+                            )
+                        elif entry.operation == "remove":
+                            term_data = entry.term_data
+                            app_shell.glossary_manager.remove_term(
+                                german=term_data.get("german", ""),
+                            )
+                    
+                    # Save glossary and reset journal after applying all entries
+                    app_shell.glossary_manager.save()
+                    app_shell.glossary_journal.reset()
+                else:
+                    app_shell.glossary_journal.reset()
+            
+            # Start periodic auto-saves
+            state_service.start()
+            
             # Setup the close handling
             setup_window_close_handling(page, app_shell)
             
@@ -130,6 +274,12 @@ def _safe_exit(page: ft.Page, app_shell: AppShell):
     
     try:
         app_shell.home_tab.translation_service.cleanup()
+    except Exception:
+        pass
+    
+    # Stop the auto-save timer and delete the snapshot (clean shutdown)
+    try:
+        app_shell.state_service.stop(clean_exit=True)
     except Exception:
         pass
     

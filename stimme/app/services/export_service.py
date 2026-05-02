@@ -10,13 +10,13 @@ from typing import List, Dict, Any
 # Add the programs directory to the path so we can import export_manager
 sys.path.append(str(Path(__file__).parent.parent.parent / "programs"))
 
-from app.contexts.settings import SettingsManager
+from app.services.configuration_service import ConfigurationService
 from app.models.bulk_models import BookTranslation
 
 class ExportService:
     """Service for handling export requests from the UI"""
     
-    def __init__(self, settings: SettingsManager):
+    def __init__(self, settings: ConfigurationService):
         self.settings = settings
         self.export_manager = None
         

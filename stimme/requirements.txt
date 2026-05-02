@@ -7,6 +7,7 @@ lancedb>=0.6.0          # Vector Database
 onnxruntime>=1.17.0     # ONNX inference (lightweight, replaces torch at runtime)
 tokenizers>=0.15.0      # Fast tokenizer for ONNX embedding model
 python-dotenv>=1.0.0    # Environment variable management
+keyring>=25.0.0         # OS-level credential storage (Windows/macOS/Linux)
 
 # --- NUMERIC & SYSTEM ---
 numpy>=1.24.0           # Array operations for ONNX inference

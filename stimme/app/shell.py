@@ -2,20 +2,24 @@ import gc
 import flet as ft
 import threading
 import traceback
+from pathlib import Path
 from app.components.layout.sidebar import Sidebar
 from app.components.layout.home_tab import HomeTab
 from app.components.views.parallel_view import ParallelView
 from app.components.views.pdf_viewer import WebView_PDF_Viewer
 from app.state import AppState
-from app.contexts.settings import SettingsManager
+from app.services.configuration_service import ConfigurationService
 from app.theme import Colors, Fonts, UI
 from app.components.views.history_view import HistoryView
 from app.services.export_service import ExportService
 from app.services.history import HistoryManager
 from app.services.book_processor import BookProcessor
 from app.services.glossary_manager import GlossaryManager
+from app.services.glossary_journal import GlossaryJournal
 from app.services.re_translation_engine import ReTranslationEngine
 from app.services.correction_service import CorrectionService
+from app.services.state_service import StateService
+from app.services.pdf_import import PDFImportService
 from app.event_bus import EventBus
 
 
@@ -29,12 +33,20 @@ class AppShell:
         self.page = page
         self.bus = EventBus(page)
         self.state = AppState()
-        self.settings = SettingsManager()
+        self.settings = ConfigurationService(self.bus)
+
+        # State recovery service
+        stimme_dir = Path.home() / ".stimme"
+        self.state_service = StateService(self.state, self.bus, stimme_dir)
+
+        # Connect worker crash monitoring to the PDF import worker pool
+        PDFImportService._worker_pool.on_process_spawned = self.state_service.monitor_worker
 
         # 1. Global Utilities
         self.export_service = ExportService(self.settings)
         self.history_manager = HistoryManager()
-        self.glossary_manager = GlossaryManager()
+        self.glossary_journal = GlossaryJournal(stimme_dir)
+        self.glossary_manager = GlossaryManager(journal=self.glossary_journal)
 
         self.export_picker = ft.FilePicker(on_result=self._on_export_dir_result)
         self.page.overlay.append(self.export_picker)
@@ -467,7 +479,8 @@ class AppShell:
 
                     _log(f"Starting bulk translation of {len(selected_indices)} chapters...")
                     result = self.book_processor.translate_chapters(
-                        chapters, selected_indices, glossary_block=glossary_block
+                        chapters, selected_indices, glossary_block=glossary_block,
+                        glossary_manager=self.glossary_manager,
                     )
                     self.state.book_translation = result
                     if result.full_translation:
