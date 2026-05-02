@@ -4,7 +4,17 @@ A desktop application for high-register German-to-English translation, built for
 
 ## What's New
 
-This release completes a major codebase overhaul: the flat `app/components/` directory has been reorganized into logical sub-folders (`layout/`, `views/`, `tabs/`, `widgets/`, `shared/`), production dependencies have been stripped of all PyTorch references in favor of an ONNX-only runtime, hardcoded API keys and debug logging have been scrubbed, and a parallel side-by-side translation view with synchronized scrolling, version history, correction editing, and a "Commit to Memory" feedback loop has been added. The application also now supports bulk book translation with automatic chapter detection, a user-managed glossary for term pinning, and a human-in-the-loop correction pipeline backed by LanceDB vector storage.
+What's New (v1.1)
+
+This release completes Phase 1 of the development roadmap:
+
+- **Configuration Service** — A unified two-layer config system replacing the old SettingsManager. Global settings live in `~/.stimme/config.json`, scholarly personas in portable `.stimme` files. Both merge into a single Active Registry at boot.
+- **Secrets Manager** — API keys are now stored in the OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service) instead of plaintext. A "Secure My Key" button migrates existing `.env` keys to the keyring.
+- **State Recovery** — Automatic session snapshots every 60 seconds to `~/.stimme/session_recovery.json`. On crash, the app detects the snapshot and offers to restore your work. Worker process crashes are detected and reported with a red banner.
+- **Ram-o'-Meter** — A developer diagnostic tool (`ram_meter.py`) that measures per-component memory usage across the UI and backend. Probe-based discovery, subprocess isolation, configurable budgets, and a detailed Philological Performance Report to stdout.
+- **ONNX-Only Runtime** — Production dependencies have been stripped of all PyTorch references. Embedding and emotion models run on ONNX Runtime with INT8 quantization. PyTorch is only needed for model export (dev dependency).
+- **Codebase Reorganization** — The flat `app/components/` directory has been reorganized into `layout/`, `views/`, `tabs/`, `widgets/`, and `shared/`. Services layer fully extracted.
+- **Property-Based Testing** — Hypothesis-driven correctness properties for budget resolution, probe discovery, failure categorization, and verdict evaluation.
 
 ## Quick Start
 
