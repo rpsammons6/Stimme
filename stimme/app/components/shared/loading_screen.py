@@ -1,7 +1,7 @@
 import flet as ft
 from app.theme import Colors, Fonts
 
-LOADING_BG = "#231E24"
+LOADING_BG = Colors.SIDEBAR_BG
 
 
 class LoadingScreen:
@@ -35,7 +35,7 @@ class LoadingScreen:
 
         # Build shared controls
         self.progress_bar = ft.ProgressBar(
-            width=360, height=6, bgcolor="#3A3040", color=Colors.GOLD,
+            width=360, height=6, bgcolor=Colors.SURFACE, color=Colors.GOLD,
             value=0, border_radius=3,
         )
         self.status_text = ft.Text(

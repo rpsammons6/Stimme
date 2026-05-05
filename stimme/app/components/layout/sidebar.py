@@ -1,4 +1,5 @@
 import flet as ft
+import threading
 import traceback
 from app.services.configuration_service import ConfigurationService
 from app.theme import Colors, Fonts, UI
@@ -74,22 +75,7 @@ class Sidebar:
         )
         self.datasets_container = ft.Column(spacing=6)
 
-        # 5. Collapsible section state & chevrons
-        self._sections_open = {
-            "model": False,
-            "scholar": False,
-            "focus": False,
-            "export": False,
-            "datasets": False,
-            "glossary": False,
-            "keys": False,
-        }
-        self._chevrons = {
-            name: ft.Icon(ft.Icons.KEYBOARD_ARROW_DOWN, size=14, color=Colors.INK_MUTED)
-            for name in self._sections_open
-        }
-
-        # Section content containers (all start hidden)
+        # Section content containers
         self.model_content = ft.Column(controls=[self.model_dropdown], spacing=8, visible=False)
         self.scholar_content = ft.Column(controls=[
             UI.card(UI.settings_row("Philological commentary", "Annotate the translation", self.scholar_mode_switch)),
@@ -127,6 +113,66 @@ class Sidebar:
         )
         self.glossary_container = ft.Column(spacing=6, visible=False)
 
+        # Active Glossary Selector dropdowns
+        self.primary_glossary_dropdown = ft.Dropdown(
+            label="Primary Glossary",
+            hint_text="Select primary glossary…",
+            options=[],
+            on_change=self._on_primary_glossary_change,
+            bgcolor=Colors.SURFACE,
+            border_color=Colors.DIVIDER,
+            color=Colors.FOREGROUND,
+            label_style=ft.TextStyle(size=11, color=Colors.GOLD, weight="bold"),
+            text_style=ft.TextStyle(size=12),
+            border_radius=6,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=8),
+        )
+        self.secondary_glossary_dropdown = ft.Dropdown(
+            label="Secondary Glossary",
+            hint_text="None (optional)",
+            options=[],
+            on_change=self._on_secondary_glossary_change,
+            bgcolor=Colors.SURFACE,
+            border_color=Colors.DIVIDER,
+            color=Colors.FOREGROUND,
+            label_style=ft.TextStyle(size=11, color=Colors.INK_MUTED),
+            text_style=ft.TextStyle(size=12),
+            border_radius=6,
+            content_padding=ft.padding.symmetric(horizontal=10, vertical=8),
+        )
+
+        # Import/Export buttons
+        self.import_glossary_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.FILE_DOWNLOAD, size=16, color=Colors.GOLD),
+                ft.Text("Import", size=12, color=Colors.GOLD),
+            ], spacing=6),
+            on_click=self._on_import_glossary_click,
+            ink=True,
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=6),
+            bgcolor=Colors.SURFACE_RAISED,
+            tooltip="Import .glossary or .csv file",
+        )
+        self.export_glossary_btn = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.FILE_UPLOAD, size=16, color=Colors.GOLD),
+                ft.Text("Export", size=12, color=Colors.GOLD),
+            ], spacing=6),
+            on_click=self._on_export_glossary_click,
+            ink=True,
+            border_radius=6,
+            padding=ft.padding.symmetric(horizontal=8, vertical=6),
+            bgcolor=Colors.SURFACE_RAISED,
+            tooltip="Export active glossary",
+        )
+
+        # File pickers for import/export
+        self._import_picker = ft.FilePicker(on_result=self._on_import_picker_result)
+        self._export_picker = ft.FilePicker(on_result=self._on_export_picker_result)
+        page.overlay.append(self._import_picker)
+        page.overlay.append(self._export_picker)
+
         # API Keys Section
         self.api_status_icon = ft.Icon(
             ft.Icons.CHECK_CIRCLE if settings.has_api_key() else ft.Icons.ERROR,
@@ -139,6 +185,93 @@ class Sidebar:
                 self.remember_api_key_switch,
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         ], spacing=8, visible=False)
+
+        # Register EventBus listener for glossary_changed to auto-refresh
+        if bus:
+            bus.on("glossary_changed", self._on_glossary_changed_event)
+
+    # ------------------------------------------------------------------
+    # EventBus handlers
+    # ------------------------------------------------------------------
+
+    def _on_glossary_changed_event(self, **kwargs):
+        """Handle glossary_changed events from the EventBus.
+
+        Refreshes the glossary dropdowns and pinned terms display.
+        """
+        try:
+            self.refresh_glossary_dropdowns()
+            self.update_glossary_display()
+        except Exception:
+            _log(f"ERROR in _on_glossary_changed_event:\n{traceback.format_exc()}")
+
+    # ------------------------------------------------------------------
+    # Section content provider
+    # ------------------------------------------------------------------
+
+    def get_section_content(self, section_id: str) -> ft.Control:
+        """Return an ft.Column of controls for the given section ID.
+
+        Used by the AppShell to populate the detail panel when a section
+        icon is clicked in the icon rail.
+        """
+        if section_id == "model":
+            return ft.Column([
+                self.model_dropdown,
+            ], spacing=12)
+
+        elif section_id == "scholar":
+            return ft.Column([
+                UI.card(UI.settings_row(
+                    "Philological commentary",
+                    "Annotate the translation",
+                    self.scholar_mode_switch,
+                )),
+            ], spacing=12)
+
+        elif section_id == "focus":
+            return ft.Column([
+                self.thematic_focus,
+            ], spacing=12)
+
+        elif section_id == "export":
+            return ft.Column([
+                UI.card(ft.Row([
+                    ft.Container(content=self.export_directory_field, expand=True),
+                    self.browse_export_btn,
+                ], spacing=8)),
+            ], spacing=12)
+
+        elif section_id == "datasets":
+            return ft.Column([
+                self.datasets_container,
+                ft.Row([self.add_dataset_btn, self.view_datasets_btn], spacing=6),
+            ], spacing=12)
+
+        elif section_id == "glossary":
+            return ft.Column([
+                self.primary_glossary_dropdown,
+                self.secondary_glossary_dropdown,
+                ft.Divider(height=1, color=Colors.DIVIDER),
+                ft.Row([self.import_glossary_btn, self.export_glossary_btn], spacing=6),
+                ft.Divider(height=1, color=Colors.DIVIDER),
+                self.glossary_container,
+                ft.Row([self.add_glossary_btn, self.view_glossary_btn], spacing=6),
+            ], spacing=12)
+
+        elif section_id == "keys":
+            return ft.Column([
+                self.api_key_field,
+                ft.Row([
+                    ft.Text("Remember API key", size=11, color=Colors.FOREGROUND),
+                    self.remember_api_key_switch,
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ], spacing=12)
+
+        else:
+            return ft.Column([
+                ft.Text(f"Unknown section: {section_id}", size=11, color=Colors.INK_MUTED),
+            ])
 
     # ------------------------------------------------------------------
     # Helpers
@@ -190,7 +323,6 @@ class Sidebar:
             _log(f"ERROR in on_thematic_focus_change:\n{traceback.format_exc()}")
 
     def _schedule_focus_save(self):
-        import threading
         if hasattr(self, '_focus_save_timer') and self._focus_save_timer:
             self._focus_save_timer.cancel()
         self._focus_save_timer = threading.Timer(1.0, self._do_focus_save)
@@ -243,43 +375,27 @@ class Sidebar:
                 _log(f"ERROR in remove_dataset({dataset_name}):\n{traceback.format_exc()}")
         return _remove
 
-    def _toggle_section(self, name, content_control):
-        """Generic toggle for any collapsible section."""
-        try:
-            self._sections_open[name] = not self._sections_open[name]
-            is_open = self._sections_open[name]
-            self._chevrons[name].name = ft.Icons.KEYBOARD_ARROW_UP if is_open else ft.Icons.KEYBOARD_ARROW_DOWN
-            content_control.visible = is_open
-            if name == "glossary" and is_open:
-                self.update_glossary_display()
-            self.page.update()
-        except Exception:
-            _log(f"ERROR in _toggle_section({name}):\n{traceback.format_exc()}")
-
-    def toggle_model(self, e):
-        self._toggle_section("model", self.model_content)
-
-    def toggle_scholar(self, e):
-        self._toggle_section("scholar", self.scholar_content)
-
-    def toggle_focus(self, e):
-        self._toggle_section("focus", self.focus_content)
-
-    def toggle_export(self, e):
-        self._toggle_section("export", self.export_content)
-
-    def toggle_datasets(self, e):
-        self._toggle_section("datasets", self.datasets_content)
-
-    def toggle_glossary(self, e):
-        self._toggle_section("glossary", self.glossary_container)
 
     def _on_view_glossary_click(self, e):
-        """Open the Glossary tab in the center panel."""
+        """Open the active glossary in a new tab in the center panel."""
         try:
-            open_glossary = self.actions.get("open_glossary_tab")
-            if open_glossary:
-                open_glossary()
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr:
+                _log("No glossary_manager in actions — cannot view glossary")
+                return
+
+            # Get the primary active glossary
+            primary = glossary_mgr.primary_glossary
+            if primary is None:
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner("No active glossary selected. Choose one from the dropdown above.", is_error=True)
+                return
+
+            # Open it in a dedicated glossary file tab
+            open_glossary_file_tab = self.actions.get("open_glossary_file_tab")
+            if open_glossary_file_tab:
+                open_glossary_file_tab(primary)
         except Exception:
             _log(f"ERROR in _on_view_glossary_click:\n{traceback.format_exc()}")
 
@@ -292,13 +408,247 @@ class Sidebar:
         except Exception:
             _log(f"ERROR in _on_view_datasets_click:\n{traceback.format_exc()}")
 
-    def toggle_keys(self, e):
-        self._toggle_section("keys", self.keys_content)
+    # ------------------------------------------------------------------
+    # Active Glossary Selector handlers
+    # ------------------------------------------------------------------
+
+    def refresh_glossary_dropdowns(self):
+        """Refresh the Primary/Secondary glossary dropdown options from GlossaryManager."""
+        try:
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr:
+                return
+
+            files = glossary_mgr.list_glossary_files()
+            active = glossary_mgr.active_glossaries
+
+            # Build options list
+            primary_options = []
+            secondary_options = [ft.dropdown.Option("__none__", "None")]
+
+            for f in files:
+                name = f.stem
+                primary_options.append(ft.dropdown.Option(str(f), name))
+                secondary_options.append(ft.dropdown.Option(str(f), name))
+
+            self.primary_glossary_dropdown.options = primary_options
+            self.secondary_glossary_dropdown.options = secondary_options
+
+            # Set current values
+            active_paths = glossary_mgr._active_paths
+            if len(active_paths) > 0:
+                self.primary_glossary_dropdown.value = str(active_paths[0])
+            else:
+                self.primary_glossary_dropdown.value = None
+
+            if len(active_paths) > 1:
+                self.secondary_glossary_dropdown.value = str(active_paths[1])
+            else:
+                self.secondary_glossary_dropdown.value = "__none__"
+
+        except Exception:
+            _log(f"ERROR in refresh_glossary_dropdowns:\n{traceback.format_exc()}")
+
+    def _on_primary_glossary_change(self, e):
+        """Handle primary glossary dropdown selection change."""
+        try:
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr or not e.control.value:
+                return
+
+            from pathlib import Path
+            path = Path(e.control.value)
+            glossary_mgr.set_active(path, slot="primary")
+            _log(f"Primary glossary set to: {path.stem}")
+        except Exception:
+            _log(f"ERROR in _on_primary_glossary_change:\n{traceback.format_exc()}")
+
+    def _on_secondary_glossary_change(self, e):
+        """Handle secondary glossary dropdown selection change."""
+        try:
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr:
+                return
+
+            value = e.control.value
+            if value == "__none__" or not value:
+                # Remove secondary glossary
+                if len(glossary_mgr._active_paths) > 1:
+                    glossary_mgr._active_paths.pop(1)
+                    # Persist
+                    if glossary_mgr._config_service is not None:
+                        glossary_mgr._config_service.set(
+                            "active_glossaries",
+                            [str(p) for p in glossary_mgr._active_paths],
+                        )
+                    if glossary_mgr._event_bus is not None:
+                        glossary_mgr._event_bus.emit("glossary_changed")
+                return
+
+            from pathlib import Path
+            path = Path(value)
+            glossary_mgr.set_active(path, slot="secondary")
+            _log(f"Secondary glossary set to: {path.stem}")
+        except Exception:
+            _log(f"ERROR in _on_secondary_glossary_change:\n{traceback.format_exc()}")
+
+
+
+    # ------------------------------------------------------------------
+    # Import / Export handlers
+    # ------------------------------------------------------------------
+
+    def _on_import_glossary_click(self, e):
+        """Open file picker for importing a .glossary or .csv file."""
+        try:
+            self._import_picker.pick_files(
+                dialog_title="Import Glossary",
+                allowed_extensions=["glossary", "csv"],
+                allow_multiple=False,
+            )
+        except Exception:
+            _log(f"ERROR in _on_import_glossary_click:\n{traceback.format_exc()}")
+
+    def _on_export_glossary_click(self, e):
+        """Open file picker for exporting the active glossary."""
+        try:
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr or not glossary_mgr.primary_glossary:
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner("No active glossary to export.", is_error=True)
+                return
+
+            self._export_picker.save_file(
+                dialog_title="Export Glossary",
+                allowed_extensions=["glossary", "csv"],
+                file_name=f"{glossary_mgr.primary_glossary.name}.glossary",
+            )
+        except Exception:
+            _log(f"ERROR in _on_export_glossary_click:\n{traceback.format_exc()}")
+
+    def _on_import_picker_result(self, e: ft.FilePickerResultEvent):
+        """Handle the result of the import file picker."""
+        try:
+            if not e.files or len(e.files) == 0:
+                return  # User cancelled
+
+            from pathlib import Path
+
+            file_path = Path(e.files[0].path)
+            suffix = file_path.suffix.lower()
+
+            # Validate extension
+            if suffix not in (".glossary", ".csv"):
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner(
+                        "Only .glossary and .csv files are supported.",
+                        is_error=True,
+                    )
+                return
+
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr:
+                return
+
+            try:
+                glossary, conflicts = glossary_mgr.import_glossary(file_path)
+            except ValueError as ve:
+                bus = self.actions.get("bus")
+                if bus:
+                    if suffix == ".csv":
+                        bus.show_banner(
+                            "Error: Failed to import .csv to Glossaries. "
+                            "Please compare the format of your CSV to the documentation and try again.",
+                            is_error=True,
+                        )
+                    else:
+                        bus.show_banner(f"Import failed: {ve}", is_error=True)
+                return
+            except FileNotFoundError as fnf:
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner(f"File not found: {fnf}", is_error=True)
+                return
+
+            # If there are conflicts, show the conflict resolution dialog
+            if conflicts:
+                from app.components.views.glossary.dialogs.conflict_resolution import (
+                    ConflictResolutionDialog,
+                )
+
+                def _on_resolved(resolved_pairs):
+                    self.refresh_glossary_dropdowns()
+                    self.update_glossary_display()
+
+                dialog = ConflictResolutionDialog(
+                    page=self.page,
+                    conflicts=conflicts,
+                    actions=self.actions,
+                    on_resolved=_on_resolved,
+                )
+                dialog.show()
+            else:
+                # No conflicts — success
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner(f"Imported '{file_path.stem}' successfully.")
+                    bus.emit("glossary_changed")
+                self.refresh_glossary_dropdowns()
+                self.update_glossary_display()
+
+        except Exception:
+            _log(f"ERROR in _on_import_picker_result:\n{traceback.format_exc()}")
+            bus = self.actions.get("bus")
+            if bus:
+                bus.show_banner("Import failed unexpectedly.", is_error=True)
+
+    def _on_export_picker_result(self, e: ft.FilePickerResultEvent):
+        """Handle the result of the export file picker."""
+        try:
+            if not e.path:
+                return  # User cancelled
+
+            from pathlib import Path
+
+            dest_path = Path(e.path)
+            suffix = dest_path.suffix.lower()
+
+            glossary_mgr = self.actions.get("glossary_manager")
+            if not glossary_mgr:
+                return
+
+            try:
+                if suffix == ".csv":
+                    glossary_mgr.export_csv(dest_path)
+                elif suffix == ".glossary":
+                    glossary_mgr.export_glossary(dest_path)
+                else:
+                    # Default to .glossary if no extension
+                    if not suffix:
+                        dest_path = dest_path.with_suffix(".glossary")
+                    glossary_mgr.export_glossary(dest_path)
+
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner(f"Exported to '{dest_path.name}' successfully.")
+            except ValueError as ve:
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.show_banner(f"Export failed: {ve}", is_error=True)
+
+        except Exception:
+            _log(f"ERROR in _on_export_picker_result:\n{traceback.format_exc()}")
+            bus = self.actions.get("bus")
+            if bus:
+                bus.show_banner("Export failed unexpectedly.", is_error=True)
 
     def update_glossary_display(self):
         """Refresh the sidebar glossary section — shows only pinned terms."""
         try:
             self.glossary_container.controls.clear()
+            self.refresh_glossary_dropdowns()
             glossary_mgr = self.actions.get("glossary_manager")
             if not glossary_mgr:
                 self.glossary_container.controls.append(
@@ -528,84 +878,6 @@ class Sidebar:
         except Exception:
             _log(f"ERROR in update_datasets_display:\n{traceback.format_exc()}")
 
-    # ------------------------------------------------------------------
-    # Build
-    # ------------------------------------------------------------------
 
-    def _collapsible_header(self, title, icon_widget, chevron, on_tap, extra_icons=None):
-        """Build a clickable collapsible section header row."""
-        row_controls = [icon_widget]
-        row_controls.append(
-            ft.Text(title, size=13, font_family=Fonts.HEADER, color=Colors.GOLD, weight="bold")
-        )
-        row_controls.append(ft.Container(expand=True))
-        if extra_icons:
-            row_controls.extend(extra_icons)
-        row_controls.append(chevron)
-        return ft.GestureDetector(
-            on_tap=on_tap, mouse_cursor=ft.MouseCursor.CLICK,
-            content=ft.Row(row_controls),
-        )
 
-    def build(self):
-        self.update_datasets_display()
-        return ft.Container(
-            expand=True, width=288, bgcolor=Colors.SIDEBAR_BG,
-            border=ft.border.only(left=ft.BorderSide(1, Colors.DIVIDER)),
-            padding=ft.padding.all(20),
-            content=ft.Column(expand=True, spacing=0, controls=[
-                ft.ListView(expand=True, spacing=16, controls=[
-                    # Logo
-                    ft.Container(
-                        content=ft.Image(src="/stimme-logo.png", width=192, height=120, fit=ft.ImageFit.CONTAIN),
-                        alignment=ft.alignment.center, padding=ft.padding.only(bottom=10),
-                    ),
-                    # Model
-                    ft.Column([
-                        self._collapsible_header("Model", self.monk_icon, self._chevrons["model"], self.toggle_model),
-                        self.model_content,
-                    ], spacing=8),
-                    # Scholar Mode
-                    ft.Column([
-                        self._collapsible_header("Scholar Mode", self.quill_icon, self._chevrons["scholar"], self.toggle_scholar),
-                        self.scholar_content,
-                    ], spacing=8),
-                    # Thematic Focus
-                    ft.Column([
-                        self._collapsible_header("Thematic Focus", self.theme_icon, self._chevrons["focus"], self.toggle_focus),
-                        self.focus_content,
-                    ], spacing=8),
-                    # Export Directory
-                    ft.Column([
-                        self._collapsible_header("Export Directory", self.scroll_icon, self._chevrons["export"], self.toggle_export),
-                        self.export_content,
-                    ], spacing=8),
-                    # Datasets
-                    ft.Column([
-                        self._collapsible_header("Datasets", self.openbook_icon, self._chevrons["datasets"], self.toggle_datasets),
-                        self.datasets_content,
-                    ], spacing=8),
-                    # Glossary
-                    ft.Column([
-                        self._collapsible_header("Glossary", self.glossary_icon, self._chevrons["glossary"], self.toggle_glossary),
-                        self.glossary_container,
-                    ], spacing=8),
-                    # API Keys
-                    ft.Column([
-                        self._collapsible_header("API Keys", self.key_icon, self._chevrons["keys"], self.toggle_keys, extra_icons=[self.api_status_icon]),
-                        self.keys_content,
-                    ], spacing=8),
-                ]),
-                # Settings button pinned to bottom
-                ft.Container(
-                    content=ft.Row([
-                        UI.icon("icon-settings.svg", size=20),
-                        ft.Text("Settings", size=14, font_family=Fonts.FRAKTUR, color=Colors.GOLD),
-                    ], spacing=8),
-                    padding=ft.padding.only(top=12),
-                    on_click=lambda _: None,
-                    ink=True,
-                    border_radius=6,
-                ),
-            ]),
-        )
+

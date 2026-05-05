@@ -75,8 +75,6 @@ class TranslationService:
             
             # Get the API key from settings (sidebar) to pass directly to brain
             api_key = self.settings.get_api_key()
-            print(f"🔑 DEBUG translate_async: settings.get_api_key() = '{api_key[:12]}...' (len={len(api_key)})" if api_key else f"🔑 DEBUG translate_async: settings.get_api_key() = EMPTY")
-            print(f"🔑 DEBUG translate_async: settings.has_api_key() = {self.settings.has_api_key()}")
             
             # This is the inner function that runs in the background thread
             def _translate():
@@ -176,36 +174,22 @@ class TranslationService:
 
     def _friendly_error(self, e: Exception) -> str:
         """Convert raw exceptions into user-friendly error messages."""
-        # DEBUG: Print the actual exception so we can see what's really happening
-        print(f"🔴 DEBUG _friendly_error: exception type = {type(e).__name__}")
-        print(f"🔴 DEBUG _friendly_error: exception module = {type(e).__module__}")
-        print(f"🔴 DEBUG _friendly_error: exception str = {str(e)[:300]}")
-        if hasattr(e, 'status_code'):
-            print(f"🔴 DEBUG _friendly_error: status_code = {e.status_code}")
-        if hasattr(e, '__cause__') and e.__cause__:
-            print(f"🔴 DEBUG _friendly_error: __cause__ = {type(e.__cause__).__name__}: {str(e.__cause__)[:200]}")
-        
         # Check Anthropic SDK exception types first (more reliable than string matching)
         try:
             import anthropic
             if isinstance(e, anthropic.AuthenticationError):
-                print(f"🔴 DEBUG _friendly_error: MATCHED AuthenticationError")
                 return "API key is invalid or expired. Please update it in the sidebar."
             if isinstance(e, anthropic.RateLimitError):
-                print(f"🔴 DEBUG _friendly_error: MATCHED RateLimitError")
                 return "Rate limited by the API. Please wait a moment and try again."
             if isinstance(e, anthropic.APIConnectionError):
-                print(f"🔴 DEBUG _friendly_error: MATCHED APIConnectionError")
                 return "No internet connection. Please check your network and try again."
             if isinstance(e, anthropic.APIStatusError) and hasattr(e, 'status_code'):
-                print(f"🔴 DEBUG _friendly_error: MATCHED APIStatusError with code {e.status_code}")
                 if e.status_code in (500, 502, 503):
                     return "The translation service is temporarily unavailable. Try again shortly."
                 if e.status_code == 529:
                     return "The API is overloaded. Please try again in a few minutes."
-            print(f"🔴 DEBUG _friendly_error: No Anthropic exception type matched")
         except ImportError:
-            print(f"🔴 DEBUG _friendly_error: Could not import anthropic for type checking")
+            pass
 
         # Fallback to string matching for non-Anthropic errors
         msg = str(e).lower()

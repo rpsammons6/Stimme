@@ -106,28 +106,26 @@ def export_embedding_model(models_dir: str | Path | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 def export_emotion_model(models_dir: str | Path | None = None) -> None:
-    """Export a DistilBERT-based German emotion model to ONNX via optimum.
+    """Export the fine-tuned German emotion RoBERTa model to ONNX via optimum.
 
     Uses ``ORTModelForSequenceClassification.from_pretrained(export=True)``
     to convert the PyTorch checkpoint to ONNX, then quantizes to INT8.
 
-    The model should be a fine-tuned ``distilbert-base-german-cased`` checkpoint
-    trained for 6-class German emotion classification (anger, fear, disgust,
-    sadness, joy, none of them).  Replace the model_id below with your custom
-    fine-tuned checkpoint path or HuggingFace repo when available.
+    The model is ``visegradmedia-emotion/Emotion_RoBERTa_german6_v7``, a
+    fine-tuned RoBERTa for 6-class German emotion classification (anger,
+    fear, disgust, sadness, joy, none of them).
     """
     import json as _json
 
     from optimum.onnxruntime import ORTModelForSequenceClassification
     from transformers import AutoTokenizer
 
-    # DistilBERT-based German emotion model (~66M params, ~40-65MB quantized).
-    # Replace with a fine-tuned checkpoint for 6-class German emotion
-    # classification when available (e.g. "your-org/distilbert-german-emotion").
-    model_id = "distilbert-base-german-cased"
+    # Fine-tuned German emotion RoBERTa — 6-class emotion classification.
+    # This is the same model used by the PyTorch fallback path.
+    model_id = "visegradmedia-emotion/Emotion_RoBERTa_german6_v7"
 
-    # Expected 6-class emotion label mapping (must match the original
-    # RoBERTa model's output format for downstream compatibility).
+    # Expected 6-class emotion label mapping (should already be in the
+    # fine-tuned model's config, but we verify/patch as a safety net).
     EMOTION_ID2LABEL = {
         0: "anger",
         1: "fear",

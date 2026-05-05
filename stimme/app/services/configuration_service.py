@@ -32,7 +32,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from app.services.config_schema import GLOBAL_SCHEMA
 from app.services.global_loader import GlobalLoader
 from app.services.persona_loader import PersonaLoader
 from app.services.merge_engine import MergeEngine
@@ -50,7 +49,8 @@ class ConfigurationService:
         Args:
             event_bus: The app's :class:`~app.event_bus.EventBus` instance
                 for broadcasting changes.
-            stimme_dir: Override for ``~/.stimme`` (useful for testing).
+            stimme_dir: Override for the project root directory (defaults to
+                ``~/.stimme`` if not provided, but normally passed by AppShell).
         """
         self._bus = event_bus
         self._stimme_dir = Path(stimme_dir) if stimme_dir else Path.home() / ".stimme"
@@ -412,3 +412,39 @@ class ConfigurationService:
     def set_remember_api_key(self, remember: bool) -> None:
         """Set whether to remember API key."""
         self.set("remember_api_key", remember)
+
+    # ------------------------------------------------------------------
+    # Static helpers (no instance required)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_early_theme(stimme_dir: Path | None = None) -> str:
+        """Read the persisted theme mode without instantiating the full service.
+
+        This is used during the boot sequence to apply the correct palette
+        before AppShell or any service is created.
+
+        Args:
+            stimme_dir: Path to the stimme project directory containing
+                ``config.json``. If None, defaults to the grandparent of
+                this file (i.e. the ``stimme/`` root).
+
+        Returns:
+            ``"dark"`` or ``"light"``. Defaults to ``"dark"`` on any error
+            (missing file, corrupt JSON, unknown label).
+        """
+        import json
+
+        try:
+            if stimme_dir is None:
+                stimme_dir = Path(__file__).resolve().parent.parent.parent
+            config_path = Path(stimme_dir) / "config.json"
+            if not config_path.exists():
+                return "dark"
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            theme_label = cfg.get("theme", "Dunkel")
+            from app.theme import _THEME_LABEL_TO_MODE
+            return _THEME_LABEL_TO_MODE.get(theme_label, "dark")
+        except Exception:
+            return "dark"

@@ -20,11 +20,26 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Keyring availability probe — resolved once at import time.
+# If the ``keyring`` package is not installed the flag stays False
+# and all keyring operations gracefully degrade to .env / RAM.
+# ------------------------------------------------------------------
+_keyring_available: bool = False
+try:
+    import keyring as _keyring_mod  # noqa: F401
+
+    _keyring_available = True
+except ImportError:
+    logger.warning(
+        "SecretsManager: 'keyring' package is not installed — "
+        "OS keyring operations will be skipped; falling back to "
+        ".env file and RAM session cache.",
+    )
 
 
 class SecretsManager:
@@ -68,9 +83,14 @@ class SecretsManager:
     def store(self, api_key: str) -> bool:
         """Save *api_key* to the OS keyring.
 
-        Returns ``True`` on success.  Logs a warning on keyring failure
-        without crashing.
+        Returns ``True`` on success, ``False`` if the keyring package is
+        missing or the backend fails.  Never crashes.
         """
+        if not _keyring_available:
+            logger.warning(
+                "SecretsManager: cannot store key — keyring package not installed",
+            )
+            return False
         try:
             import keyring
             keyring.set_password(self.SERVICE_NAME, self.ACCOUNT_NAME, api_key)
@@ -84,13 +104,18 @@ class SecretsManager:
 
     def delete(self) -> None:
         """Remove the API key from the OS keyring and clear the RAM cache."""
-        try:
-            import keyring
-            keyring.delete_password(self.SERVICE_NAME, self.ACCOUNT_NAME)
-            logger.info("SecretsManager: API key deleted from OS keyring")
-        except Exception as exc:
-            logger.warning(
-                "SecretsManager: failed to delete key from OS keyring: %s", exc,
+        if _keyring_available:
+            try:
+                import keyring
+                keyring.delete_password(self.SERVICE_NAME, self.ACCOUNT_NAME)
+                logger.info("SecretsManager: API key deleted from OS keyring")
+            except Exception as exc:
+                logger.warning(
+                    "SecretsManager: failed to delete key from OS keyring: %s", exc,
+                )
+        else:
+            logger.info(
+                "SecretsManager: skipping keyring delete — keyring package not installed",
             )
         self._session_key = ""
 
@@ -131,6 +156,14 @@ class SecretsManager:
         """
         self._session_key = api_key
 
+    @staticmethod
+    def is_keyring_available() -> bool:
+        """Return whether the ``keyring`` package is installed and importable.
+
+        Used by the Dependency Health Check to report keyring status.
+        """
+        return _keyring_available
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -138,9 +171,11 @@ class SecretsManager:
     def _read_keyring(self) -> str | None:
         """Attempt ``keyring.get_password()``.
 
-        Returns ``None`` on any failure (e.g. headless Linux with no secret
-        service backend).
+        Returns ``None`` when the keyring package is not installed or on any
+        backend failure (e.g. headless Linux with no secret service).
         """
+        if not _keyring_available:
+            return None
         try:
             import keyring
             value = keyring.get_password(self.SERVICE_NAME, self.ACCOUNT_NAME)
@@ -232,7 +267,8 @@ class SecretsManager:
             new_text += "\n"
 
         try:
-            env_path.write_text(new_text, encoding="utf-8")
+            from app.utils.file_ops import atomic_write
+            atomic_write(env_path, new_text)
             logger.info("SecretsManager: removed CLAUDE_API_KEY from .env")
         except OSError as exc:
             logger.warning(

@@ -144,7 +144,6 @@ def log_surviving_refs():
         warnings.simplefilter("ignore")
         gc.collect()
 
-    import flet as ft
     from app.components.views.pdf_viewer import WebView_PDF_Viewer
     from app.components.views.parallel_view import ParallelView
 

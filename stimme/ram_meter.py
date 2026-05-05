@@ -44,6 +44,8 @@ _DEFAULT_TIMEOUT = 60
 # CLI
 # ----------------------------------------------------------------------- #
 
+print("Loading Ram-O'-Meter...")
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments.
 

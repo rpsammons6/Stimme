@@ -3,12 +3,14 @@ from pathlib import Path
 from datetime import datetime
 
 from app.models.bulk_models import BookTranslation
+from app.utils.file_ops import atomic_write
 
 class HistoryManager:
     """Service for managing translation history"""
     
     def __init__(self):
-        self.history_dir = Path.home() / ".stimme"
+        # Project root: stimme/ directory (where main.py lives)
+        self.history_dir = Path(__file__).resolve().parent.parent.parent
         self.history_file = self.history_dir / "history.json"
         self.history_dir.mkdir(exist_ok=True)
         self.history = []
@@ -86,12 +88,12 @@ class HistoryManager:
             self.save_history()
             print("✅ HISTORY: Migrated old entries to include markdown content")
     
-    def save_history(self):
-        """Save history to file"""
+    def save_history(self) -> None:
+        """Save history to file using atomic write."""
         try:
-            self.history_dir.mkdir(exist_ok=True)  # Ensure dir exists
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, indent=2)
+            self.history_dir.mkdir(exist_ok=True)
+            content = json.dumps(self.history, indent=2, ensure_ascii=False)
+            atomic_write(self.history_file, content)
         except Exception as e:
             print(f"⚠️  HISTORY: Error saving: {e}")
     

@@ -1,15 +1,18 @@
 import gc
+import math
 import flet as ft
 import threading
 import traceback
 from pathlib import Path
 from app.components.layout.sidebar import Sidebar
+from app.components.layout.menu_bar import MenuBarComponent
 from app.components.layout.home_tab import HomeTab
 from app.components.views.parallel_view import ParallelView
 from app.components.views.pdf_viewer import WebView_PDF_Viewer
+from app.components.views.glossary.glossary_tab_view import GlossaryTabView
 from app.state import AppState
 from app.services.configuration_service import ConfigurationService
-from app.theme import Colors, Fonts, UI
+from app.theme import Colors, Fonts, UI, _THEME_LABEL_TO_MODE
 from app.components.views.history_view import HistoryView
 from app.services.export_service import ExportService
 from app.services.history import HistoryManager
@@ -21,10 +24,22 @@ from app.services.correction_service import CorrectionService
 from app.services.state_service import StateService
 from app.services.pdf_import import PDFImportService
 from app.event_bus import EventBus
+from app.components.views.preferences_window import PreferencesWindow
 
 
 def _log(msg):
     print(f"[AppShell] {msg}")
+
+
+RAIL_SECTIONS: list[tuple[str, str, str]] = [
+    ("icon-monk.svg", "Model", "model"),
+    ("icon-quill.svg", "Scholar Mode", "scholar"),
+    ("icon-theme.svg", "Thematic Focus", "focus"),
+    ("icon-scroll.svg", "Export Directory", "export"),
+    ("icon-book-open.svg", "Datasets", "datasets"),
+    ("icon-book.svg", "Glossary", "glossary"),
+    ("icon-key.svg", "API Keys", "keys"),
+]
 
 
 class AppShell:
@@ -33,10 +48,12 @@ class AppShell:
         self.page = page
         self.bus = EventBus(page)
         self.state = AppState()
-        self.settings = ConfigurationService(self.bus)
+
+        # Project root: stimme/ directory (where main.py lives)
+        stimme_dir = Path(__file__).resolve().parent.parent
+        self.settings = ConfigurationService(self.bus, stimme_dir=stimme_dir)
 
         # State recovery service
-        stimme_dir = Path.home() / ".stimme"
         self.state_service = StateService(self.state, self.bus, stimme_dir)
 
         # Connect worker crash monitoring to the PDF import worker pool
@@ -46,17 +63,25 @@ class AppShell:
         self.export_service = ExportService(self.settings)
         self.history_manager = HistoryManager()
         self.glossary_journal = GlossaryJournal(stimme_dir)
-        self.glossary_manager = GlossaryManager(journal=self.glossary_journal)
+        self.glossary_manager = GlossaryManager(
+            journal=self.glossary_journal,
+            config_service=self.settings,
+            event_bus=self.bus,
+        )
 
         self.export_picker = ft.FilePicker(on_result=self._on_export_dir_result)
         self.page.overlay.append(self.export_picker)
+
+        # File picker for menu-triggered Open Glossary action
+        self._glossary_open_picker = ft.FilePicker(on_result=self._on_menu_open_glossary_result)
+        self.page.overlay.append(self._glossary_open_picker)
 
         # 2. Tabs and Layout
         self.tab_bar_row = ft.Row(controls=[], spacing=4, scroll=ft.ScrollMode.ADAPTIVE)
         self.tab_bar_container = ft.Container(
             content=self.tab_bar_row,
             padding=ft.padding.only(left=8, top=4),
-            bgcolor=Colors.SURFACE,
+            bgcolor=Colors.BACKGROUND,
             border=ft.border.only(bottom=ft.BorderSide(1, Colors.DIVIDER)),
             height=44,
         )
@@ -64,6 +89,22 @@ class AppShell:
 
         # Track the active ParallelView so we can cleanup its PDF viewer on tab close
         self._active_parallel_view = None
+
+        # Track open glossary file tabs (GlossaryTabView instances)
+        self._glossary_tabs: list[GlossaryTabView] = []
+        self._active_glossary_tab_index: int = -1  # -1 means no glossary tab active
+
+        # Inject glossary dirty checker into AppState for exit guard delegation
+        self.state.set_dirty_checker(self.has_dirty_glossaries)
+
+        # Icon rail / detail panel state
+        self._active_section: str | None = None
+        self._last_section: str | None = None
+        self._rail_expanded: bool = False
+        self._rail_labels: dict[str, ft.Text] = {}
+        self._rail_chevrons: dict[str, ft.Icon] = {}
+        self._rail_content_slots: dict[str, ft.Container] = {}
+        self._rail_row_containers: dict[str, ft.Container] = {}
 
         # 3. Shell actions — passed to components so they never need a ref to shell
         self.actions = {
@@ -75,7 +116,8 @@ class AppShell:
             "rebuild_center_tabs": lambda: self.home_tab.center_panel.rebuild_tabs(),
             "open_dataset_picker": lambda e=None: self.home_tab.center_panel.on_add_button_click(e),
             "glossary_manager": self.glossary_manager,
-            "open_glossary_tab": self._open_glossary_in_center,
+            "open_glossary_file_tab": self.open_glossary_file_tab,
+            "on_open_glossary_tab": self.open_glossary_file_tab,
             "open_datasets_tab": self._open_datasets_in_center,
             "open_corrections_tab": self._open_corrections_in_center,
             "refresh_glossary_sidebar": self._refresh_glossary_sidebar,
@@ -118,6 +160,7 @@ class AppShell:
         self.actions["set_input_text"] = self._set_input_text
         self.actions["rebuild_tabs"] = self.rebuild_tabs
         self.actions["set_translate_busy"] = self._set_toolbar_translate_busy
+        self.actions["export_picker"] = self.export_picker
 
         # 6. HITL services — created AFTER HomeTab so translation_service is available
         self.re_translation_engine = ReTranslationEngine(
@@ -138,6 +181,18 @@ class AppShell:
 
         # EventBus listener for HITL version refresh
         self.bus.on("version_added", self._on_version_added)
+
+        # EventBus listener for runtime theme switching
+        self.bus.on("config_changed", self._on_config_changed)
+
+        # EventBus listener for menu actions (File menu glossary operations)
+        self.bus.on("menu_action", self._on_menu_action)
+
+        # 8. Preferences window — separate Flet window for full settings control
+        self.preferences_window = PreferencesWindow(self.page, self.settings, self.bus)
+        self.actions["open_preferences"] = self.preferences_window.open
+        self.bus.on("translation_started", self.preferences_window.auto_save_and_close)
+        self.page.on_keyboard_event = self._on_keyboard_event
 
         self.rebuild_tabs()
         _log("Initialized")
@@ -308,23 +363,36 @@ class AppShell:
                 log_overlay(self.page, "rebuild_tabs BEFORE cleanup")
                 self._active_parallel_view.cleanup()
                 self._active_parallel_view = None
-                gc.collect()
+                gc.collect()   # first pass breaks reference cycles
+                gc.collect()   # second pass collects freed objects
                 log_ram("rebuild_tabs AFTER cleanup")
                 log_mem("rebuild_tabs AFTER cleanup")
                 log_overlay(self.page, "rebuild_tabs AFTER cleanup")
                 log_surviving_refs()
 
             tabs = []
-            is_home = self.state.is_home_active
+            is_home = self.state.is_home_active and self._active_glossary_tab_index < 0
             tabs.append(self._create_tab_header("Home", ft.Icons.HOME, is_home, lambda _: self.switch_to_home()))
             for i, trans in enumerate(self.state.translation_tabs):
-                is_active = i == self.state.active_translation_index
+                is_active = (i == self.state.active_translation_index) and self._active_glossary_tab_index < 0
                 tabs.append(self._create_tab_header(
                     trans["source_preview"], ft.Icons.TRANSLATE, is_active,
                     lambda e, idx=i: self.switch_to_translation(idx), closable=True, close_idx=i,
                 ))
+            # Glossary file tabs
+            for gi, gtv in enumerate(self._glossary_tabs):
+                is_active = (gi == self._active_glossary_tab_index)
+                tabs.append(self._create_tab_header(
+                    gtv.get_tab_title(), ft.Icons.MENU_BOOK, is_active,
+                    lambda e, idx=gi: self._switch_to_glossary_tab(idx),
+                    closable=True, close_idx=-(gi + 1),
+                ))
             self.tab_bar_row.controls = tabs
-            if is_home:
+            if self._active_glossary_tab_index >= 0 and self._active_glossary_tab_index < len(self._glossary_tabs):
+                # Glossary file tab is active
+                gtv = self._glossary_tabs[self._active_glossary_tab_index]
+                self.content_container.content = gtv.build()
+            elif is_home:
                 self.content_container.content = self.home_tab.build()
             else:
                 active_trans = self.state.get_active_translation()
@@ -355,19 +423,22 @@ class AppShell:
             ))
         return ft.Container(
             content=ft.Row(controls, spacing=6, tight=True),
-            bgcolor=Colors.BACKGROUND if is_active else Colors.SURFACE,
+            bgcolor=Colors.SURFACE if is_active else Colors.BACKGROUND,
             padding=ft.padding.symmetric(horizontal=12, vertical=10),
             border_radius=ft.border_radius.only(top_left=6, top_right=6),
+            expand=is_active and not closable,
             on_click=on_click,
         )
 
     def switch_to_home(self):
         self.state.active_translation_index = -1
+        self._active_glossary_tab_index = -1
         self.rebuild_tabs()
 
     def switch_to_translation(self, index):
         if 0 <= index < len(self.state.translation_tabs):
             self.state.active_translation_index = index
+            self._active_glossary_tab_index = -1
         self.rebuild_tabs()
 
     def close_translation_tab(self, index):
@@ -375,6 +446,12 @@ class AppShell:
             from app.mem_debug import log_ram
             log_ram(f"close_translation_tab({index}) START")
             _log(f"close_translation_tab({index})")
+
+            # Negative indices are glossary file tabs
+            if index < 0:
+                self.close_glossary_tab(-(index + 1))
+                return
+
             self.state.close_translation_tab(index)
             # If no translation tabs remain, clear the home-tab PDF viewer
             # so its base64 page data is released from RAM.
@@ -389,13 +466,172 @@ class AppShell:
         self.state.add_translation(source_text, translation, commentary, metrics, pdf_path=pdf_path, history_timestamp=history_timestamp)
         self.rebuild_tabs()
 
-    def _open_glossary_in_center(self):
-        """Switch the center panel to the Glossary tab."""
+    # ------------------------------------------------------------------ #
+    #  Glossary file tab management
+    # ------------------------------------------------------------------ #
+
+    def open_glossary_file_tab(self, glossary):
+        """Create a new GlossaryTabView for the given glossary file and add to tab bar.
+
+        If the glossary is already open in a tab, switches to that tab instead.
+        """
         try:
-            self.home_tab.center_panel.switch_to_glossary()
-            self.page.update()
+            # Check if this glossary is already open
+            for gi, gtv in enumerate(self._glossary_tabs):
+                if gtv.glossary.file_path == glossary.file_path:
+                    # Switch to existing tab
+                    self._switch_to_glossary_tab(gi)
+                    return
+
+            # Create a new GlossaryTabView
+            gtv = GlossaryTabView(
+                page=self.page,
+                glossary=glossary,
+                actions=self.actions,
+            )
+            gtv.set_on_dirty_changed(self._on_glossary_tab_dirty_changed)
+            self._glossary_tabs.append(gtv)
+
+            # Switch to the new tab
+            gi = len(self._glossary_tabs) - 1
+            self._switch_to_glossary_tab(gi)
         except Exception:
-            _log(f"ERROR in _open_glossary_in_center:\n{traceback.format_exc()}")
+            _log(f"ERROR in open_glossary_file_tab:\n{traceback.format_exc()}")
+
+    def close_glossary_tab(self, glossary_index: int):
+        """Close a glossary tab, prompting save if dirty.
+
+        Args:
+            glossary_index: Index into self._glossary_tabs list.
+        """
+        try:
+            if glossary_index < 0 or glossary_index >= len(self._glossary_tabs):
+                return
+
+            gtv = self._glossary_tabs[glossary_index]
+
+            if gtv.state.is_dirty:
+                # Show save prompt dialog
+                self._show_save_changes_dialog(gtv, glossary_index)
+            else:
+                self._remove_glossary_tab(glossary_index)
+        except Exception:
+            _log(f"ERROR in close_glossary_tab:\n{traceback.format_exc()}")
+
+    def _switch_to_glossary_tab(self, glossary_index: int):
+        """Switch to a glossary file tab by its index."""
+        try:
+            if 0 <= glossary_index < len(self._glossary_tabs):
+                self._active_glossary_tab_index = glossary_index
+                self.rebuild_tabs()
+        except Exception:
+            _log(f"ERROR in _switch_to_glossary_tab:\n{traceback.format_exc()}")
+
+    def _remove_glossary_tab(self, glossary_index: int):
+        """Remove a glossary tab without saving."""
+        try:
+            if 0 <= glossary_index < len(self._glossary_tabs):
+                self._glossary_tabs.pop(glossary_index)
+                # Adjust active index if needed
+                if self._active_glossary_tab_index >= len(self._glossary_tabs):
+                    self._active_glossary_tab_index = -1
+                elif self._active_glossary_tab_index == glossary_index:
+                    self._active_glossary_tab_index = -1
+                elif self._active_glossary_tab_index > glossary_index:
+                    self._active_glossary_tab_index -= 1
+                self.rebuild_tabs()
+        except Exception:
+            _log(f"ERROR in _remove_glossary_tab:\n{traceback.format_exc()}")
+
+    def has_dirty_glossaries(self) -> bool:
+        """Return True if any open glossary tab has unsaved changes."""
+        return any(gtv.state.is_dirty for gtv in self._glossary_tabs)
+
+    def get_dirty_glossary_count(self) -> int:
+        """Return the number of glossary tabs with unsaved changes."""
+        return sum(1 for gtv in self._glossary_tabs if gtv.state.is_dirty)
+
+    def save_all_dirty_glossaries(self) -> tuple[bool, str | None]:
+        """Save all dirty glossary tabs. Returns (success, error_message).
+
+        Iterates all open glossary tabs, saves each dirty one via
+        GlossaryManager.save_glossary(). If any save fails, returns
+        immediately with the error details.
+
+        Progressive Success (Forensic Transparency): Each tab's is_dirty
+        flag is cleared immediately after its successful save. If the 4th
+        of 5 glossaries fails, the first 3 are already marked clean — the
+        user can see exactly which tab still has the asterisk (*) in its
+        title, identifying the problematic file at a glance.
+        """
+        for gtv in self._glossary_tabs:
+            if gtv.state.is_dirty:
+                try:
+                    self.glossary_manager.save_glossary(gtv.glossary)
+                    gtv.state.is_dirty = False
+                except (ValueError, OSError, PermissionError) as exc:
+                    name = gtv.glossary.name or "Unknown"
+                    return False, f"Failed to save '{name}': {exc}"
+        return True, None
+
+    def _on_glossary_tab_dirty_changed(self, tab_view: GlossaryTabView):
+        """Update tab title when a glossary tab's dirty state changes."""
+        try:
+            self.rebuild_tabs()
+        except Exception:
+            _log(f"ERROR in _on_glossary_tab_dirty_changed:\n{traceback.format_exc()}")
+
+    def _show_save_changes_dialog(self, gtv: GlossaryTabView, glossary_index: int):
+        """Show a Save/Don't Save/Cancel dialog for a dirty glossary tab."""
+        try:
+            name = gtv.glossary.name or "Untitled"
+
+            def on_save(e):
+                self.bus.close_dialog()
+                gtv.save()
+                self._remove_glossary_tab(glossary_index)
+
+            def on_dont_save(e):
+                self.bus.close_dialog()
+                self._remove_glossary_tab(glossary_index)
+
+            def on_cancel(e):
+                self.bus.close_dialog()
+
+            from app.theme import Fonts as _Fonts
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Save Changes?", size=16, weight="bold", color=Colors.GOLD),
+                content=ft.Text(
+                    f'Do you want to save changes to "{name}"?',
+                    size=13,
+                    color=Colors.FOREGROUND,
+                ),
+                actions=[
+                    ft.TextButton(
+                        "Cancel",
+                        on_click=on_cancel,
+                        style=ft.ButtonStyle(color=Colors.INK_MUTED),
+                    ),
+                    ft.TextButton(
+                        "Don't Save",
+                        on_click=on_dont_save,
+                        style=ft.ButtonStyle(color=Colors.DESTRUCTIVE),
+                    ),
+                    ft.TextButton(
+                        "Save",
+                        on_click=on_save,
+                        style=ft.ButtonStyle(color=Colors.GOLD),
+                    ),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                bgcolor=Colors.BACKGROUND,
+            )
+
+            self.bus.show_dialog(dialog)
+        except Exception:
+            _log(f"ERROR in _show_save_changes_dialog:\n{traceback.format_exc()}")
 
     def _open_datasets_in_center(self):
         """Switch the center panel to the Datasets tab."""
@@ -420,6 +656,124 @@ class AppShell:
             self.page.update()
         except Exception:
             _log(f"ERROR in _refresh_glossary_sidebar:\n{traceback.format_exc()}")
+
+    # ------------------------------------------------------------------ #
+    #  Menu action handler
+    # ------------------------------------------------------------------ #
+
+    def _on_menu_action(self, action: str = "", **kwargs):
+        """Handle menu_action events from the MenuBar."""
+        try:
+            if action == "file.new_glossary":
+                self._menu_new_glossary()
+            elif action == "file.open_glossary":
+                self._menu_open_glossary()
+            elif action == "file.save_glossary":
+                self._menu_save_glossary()
+        except Exception:
+            _log(f"ERROR in _on_menu_action({action}):\n{traceback.format_exc()}")
+
+    def _menu_new_glossary(self):
+        """Handle File → New Glossary menu action."""
+        try:
+            from app.components.views.glossary.dialogs.new_glossary import NewGlossaryDialog
+
+            def _on_created(glossary):
+                self.open_glossary_file_tab(glossary)
+
+            dialog = NewGlossaryDialog(
+                page=self.page,
+                actions=self.actions,
+                on_created=_on_created,
+            )
+            dialog.show()
+        except Exception:
+            _log(f"ERROR in _menu_new_glossary:\n{traceback.format_exc()}")
+
+    def _menu_open_glossary(self):
+        """Handle File → Open Glossary menu action."""
+        try:
+            self._glossary_open_picker.pick_files(
+                dialog_title="Open Glossary",
+                allowed_extensions=["glossary", "csv"],
+                allow_multiple=False,
+            )
+        except Exception:
+            _log(f"ERROR in _menu_open_glossary:\n{traceback.format_exc()}")
+
+    def _menu_save_glossary(self):
+        """Handle File → Save Glossary menu action. Saves the active glossary tab."""
+        try:
+            if self._active_glossary_tab_index >= 0 and self._active_glossary_tab_index < len(self._glossary_tabs):
+                gtv = self._glossary_tabs[self._active_glossary_tab_index]
+                gtv.save()
+                self.rebuild_tabs()
+            else:
+                _log("No active glossary tab to save")
+        except Exception:
+            _log(f"ERROR in _menu_save_glossary:\n{traceback.format_exc()}")
+
+    def _on_menu_open_glossary_result(self, e: ft.FilePickerResultEvent):
+        """Handle the result of the menu-triggered Open Glossary file picker."""
+        try:
+            if not e.files or len(e.files) == 0:
+                return  # User cancelled
+
+            from pathlib import Path
+
+            file_path = Path(e.files[0].path)
+            suffix = file_path.suffix.lower()
+
+            # Validate extension
+            if suffix not in (".glossary", ".csv"):
+                self.bus.show_banner(
+                    "Only .glossary and .csv files are supported.",
+                    is_error=True,
+                )
+                return
+
+            try:
+                if suffix == ".glossary":
+                    glossary = self.glossary_manager.load_glossary(file_path)
+                    self.open_glossary_file_tab(glossary)
+                elif suffix == ".csv":
+                    # CSV files are imported (converted to .glossary format)
+                    glossary, conflicts = self.glossary_manager.import_glossary(file_path)
+                    if conflicts:
+                        from app.components.views.glossary.dialogs.conflict_resolution import (
+                            ConflictResolutionDialog,
+                        )
+
+                        def _on_resolved(resolved_pairs):
+                            self.open_glossary_file_tab(glossary)
+                            self.bus.emit("glossary_changed")
+
+                        dialog = ConflictResolutionDialog(
+                            page=self.page,
+                            conflicts=conflicts,
+                            actions=self.actions,
+                            on_resolved=_on_resolved,
+                        )
+                        dialog.show()
+                    else:
+                        self.open_glossary_file_tab(glossary)
+                        self.bus.emit("glossary_changed")
+            except ValueError as ve:
+                if suffix == ".csv":
+                    self.bus.show_banner(
+                        "Error: Failed to import .csv to Glossaries. "
+                        "Please compare the format of your CSV to the documentation and try again.",
+                        is_error=True,
+                    )
+                else:
+                    self.bus.show_banner(f"Failed to open glossary: {ve}", is_error=True)
+            except FileNotFoundError:
+                self.bus.show_banner(f"File not found: {file_path.name}", is_error=True)
+            except Exception as ex:
+                self.bus.show_banner(f"Failed to open glossary: {ex}", is_error=True)
+
+        except Exception:
+            _log(f"ERROR in _on_menu_open_glossary_result:\n{traceback.format_exc()}")
 
     # ------------------------------------------------------------------ #
     #  Bulk mode actions (Task 8.1)
@@ -610,6 +964,98 @@ class AppShell:
         except Exception:
             _log(f"ERROR in _on_version_added:\n{traceback.format_exc()}")
 
+    def _on_config_changed(self, key: str, value, **kwargs):
+        """Handle config_changed event — apply theme when theme key changes."""
+        try:
+            if key == "theme":
+                mode = _THEME_LABEL_TO_MODE.get(value, "dark")
+                Colors.apply(mode)
+                # Update Flet's native theme so Material widgets follow suit
+                self.page.theme_mode = (
+                    ft.ThemeMode.DARK if mode == "dark" else ft.ThemeMode.LIGHT
+                )
+                self.page.bgcolor = Colors.BACKGROUND
+                self.page.theme = ft.Theme(
+                    font_family="CormorantGaramond",
+                    use_material3=True,
+                    color_scheme=ft.ColorScheme(
+                        primary=Colors.GOLD,
+                        surface=Colors.SURFACE,
+                        background=Colors.BACKGROUND,
+                    ),
+                    splash_color=ft.Colors.TRANSPARENT,
+                )
+                # Global rebuild: re-initialize the entire control tree so
+                # every component naturally reads the updated Colors tokens.
+                self._rebuild_ui()
+        except Exception:
+            _log(f"ERROR in _on_config_changed:\n{traceback.format_exc()}")
+
+    def _rebuild_ui(self):
+        """Replace the page content with a freshly built control tree.
+
+        Called after Colors.apply() so every component constructor and
+        build() method picks up the new palette from the semantic tokens.
+        Preserves user state (input text, etc.) across the rebuild.
+        """
+        try:
+            # Clean up the old HomeTab's file picker from the overlay
+            old_picker = getattr(self.home_tab, 'file_picker', None)
+            if old_picker and old_picker in self.page.overlay:
+                self.page.overlay.remove(old_picker)
+
+            # Remove shell-level pickers from overlay before rebuild
+            for picker in (self.export_picker, self._glossary_open_picker):
+                if picker in self.page.overlay:
+                    self.page.overlay.remove(picker)
+
+            # Re-create components that cache colors at init time
+            self.home_tab = HomeTab(
+                page=self.page,
+                state=self.state,
+                settings=self.settings,
+                bus=self.bus,
+                actions=self.actions,
+            )
+            self.sidebar = Sidebar(
+                page=self.page,
+                settings=self.settings,
+                bus=self.bus,
+                actions=self.actions,
+            )
+            self.home_tab.center_panel.sidebar = self.sidebar
+
+            # Restore input text from AppState into the new TextField
+            if self.state.input_text:
+                self.home_tab.input_panel.set_text(self.state.input_text)
+
+            # Rebuild the tab bar container colors
+            self.tab_bar_container.bgcolor = Colors.BACKGROUND
+            self.tab_bar_container.border = ft.border.only(
+                bottom=ft.BorderSide(1, Colors.DIVIDER)
+            )
+            self.rebuild_tabs()
+
+            # Reset inspector state so panel starts collapsed after theme switch
+            self._active_section = None
+            self._last_section = getattr(self, '_last_section', None)
+
+            # Replace the root stack content with a fresh build
+            new_root = self.build()
+            self.page.controls.clear()
+            self.page.add(new_root)
+
+            # Re-attach shell-level pickers to the fresh page overlay
+            self.page.overlay.append(self.export_picker)
+            self.page.overlay.append(self._glossary_open_picker)
+
+            # The old stack (and the preferences float container) is gone.
+            # Reset the open flag so the window can be re-opened.
+            self.preferences_window._is_open = False
+            self.preferences_window._is_minimized = False
+        except Exception:
+            _log(f"ERROR in _rebuild_ui:\n{traceback.format_exc()}")
+
     # ------------------------------------------------------------------ #
     #  Helpers
     # ------------------------------------------------------------------ #
@@ -619,25 +1065,318 @@ class AppShell:
         self.page.update()
 
     # ------------------------------------------------------------------ #
+    #  Expanding Rail Builder Methods
+    # ------------------------------------------------------------------ #
+
+    def _build_rail_row(self, icon_asset: str, label: str, section_id: str) -> ft.Container:
+        """Build a single Rail_Row with icon, label, and chevron."""
+        # Icon container: 48x48, always visible
+        icon_container = ft.Container(
+            content=ft.Image(src=icon_asset, width=24, height=24),
+            width=48,
+            height=48,
+            alignment=ft.alignment.center,
+        )
+
+        # Label: visible only when expanded
+        label_text = ft.Text(
+            label,
+            font_family=Fonts.HEADER,
+            size=13,
+            color=Colors.GOLD,
+            visible=False,
+            no_wrap=True,
+        )
+
+        # Chevron: visible only when expanded, with animated rotation
+        chevron_icon = ft.Icon(
+            name=ft.Icons.CHEVRON_RIGHT,
+            size=16,
+            color=Colors.FOREGROUND,
+            visible=False,
+            rotate=ft.Rotate(angle=0),
+            animate_rotation=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+        )
+
+        # Spacer between label and chevron
+        spacer = ft.Container(expand=True)
+
+        # Inner row layout
+        inner_row = ft.Row(
+            controls=[icon_container, label_text, spacer, chevron_icon],
+            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        # Outer container for the row
+        row_container = ft.Container(
+            content=inner_row,
+            height=48,
+            on_click=lambda e, sid=section_id: self._on_rail_section_click(sid),
+            ink=True,
+            bgcolor="transparent",
+            tooltip=label,
+        )
+
+        # Store references for later state updates
+        self._rail_labels[section_id] = label_text
+        self._rail_chevrons[section_id] = chevron_icon
+        self._rail_row_containers[section_id] = row_container
+
+        return row_container
+
+    def _build_section_content_slot(self, section_id: str) -> ft.Container:
+        """Build a content container for a section (initially hidden)."""
+        try:
+            content = self.sidebar.get_section_content(section_id)
+        except Exception as e:
+            content = ft.Text(
+                f"Error loading section: {e}",
+                color=Colors.INK_MUTED,
+                size=11,
+            )
+
+        content_column = ft.Column(
+            controls=[content],
+            scroll=ft.ScrollMode.AUTO,
+        )
+
+        slot = ft.Container(
+            content=content_column,
+            visible=False,
+            padding=ft.padding.only(left=16, right=12, top=8, bottom=8),
+            animate_opacity=ft.Animation(150, ft.AnimationCurve.EASE_IN),
+        )
+
+        self._rail_content_slots[section_id] = slot
+        return slot
+
+    def _build_expanding_rail(self) -> ft.Container:
+        """Build the expanding rail container with all rows and content slots."""
+        # Logo section: 32x32 image, centered, with padding below
+        logo_section = ft.Container(
+            content=ft.Image(
+                src="/stimme-logo.png",
+                width=32,
+                height=32,
+                fit=ft.ImageFit.CONTAIN,
+            ),
+            alignment=ft.alignment.center,
+            padding=ft.padding.only(bottom=16, top=12),
+        )
+
+        # Build rail rows and content slots for each section
+        column_controls: list[ft.Control] = [logo_section]
+        for icon_asset, label, section_id in RAIL_SECTIONS:
+            row = self._build_rail_row(icon_asset, label, section_id)
+            content_slot = self._build_section_content_slot(section_id)
+            column_controls.append(row)
+            column_controls.append(content_slot)
+
+        # Spacer pushes settings to the bottom
+        column_controls.append(ft.Container(expand=True))
+
+        # Settings row: icon + label, on_click opens PreferencesWindow
+        settings_icon_container = ft.Container(
+            content=ft.Image(src="icon-settings.svg", width=24, height=24),
+            width=48,
+            height=48,
+            alignment=ft.alignment.center,
+        )
+        settings_label = ft.Text(
+            "Settings",
+            font_family=Fonts.HEADER,
+            size=13,
+            color=Colors.GOLD,
+            visible=False,
+            no_wrap=True,
+        )
+        # Store settings label so expand/collapse can toggle its visibility
+        self._rail_labels["settings"] = settings_label
+
+        settings_inner_row = ft.Row(
+            controls=[settings_icon_container, settings_label],
+            spacing=0,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        settings_row = ft.Container(
+            content=settings_inner_row,
+            height=48,
+            on_click=lambda e: self._on_rail_section_click("settings"),
+            ink=True,
+            bgcolor="transparent",
+            tooltip="Settings",
+        )
+        self._rail_row_containers["settings"] = settings_row
+        column_controls.append(settings_row)
+
+        # Inner column containing all controls
+        inner_column = ft.Column(
+            controls=column_controls,
+            spacing=4,
+            expand=True,
+        )
+
+        # Outer expanding container
+        self._rail_container = ft.Container(
+            content=inner_column,
+            width=48,
+            animate_size=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            bgcolor=Colors.SIDEBAR_BG,
+            border=ft.border.only(left=ft.BorderSide(1, Colors.DIVIDER)),
+        )
+
+        return self._rail_container
+
+    # ------------------------------------------------------------------ #
+    #  Expanding Rail State Transitions
+    # ------------------------------------------------------------------ #
+
+    def _expand_rail(self) -> None:
+        """Animate rail to 240px and show labels/chevrons."""
+        self._rail_container.width = 240
+        for label in self._rail_labels.values():
+            label.visible = True
+        for chevron in self._rail_chevrons.values():
+            chevron.visible = True
+        self._rail_expanded = True
+        # Suppress tooltips when labels are visible
+        for section_id, container in self._rail_row_containers.items():
+            container.tooltip = None
+
+    def _collapse_rail(self) -> None:
+        """Animate rail to 48px and hide labels/chevrons/content."""
+        self._rail_container.width = 48
+        for label in self._rail_labels.values():
+            label.visible = False
+        for chevron in self._rail_chevrons.values():
+            chevron.visible = False
+            chevron.rotate = ft.Rotate(angle=0)
+        for slot in self._rail_content_slots.values():
+            slot.visible = False
+        for section_id, container in self._rail_row_containers.items():
+            container.bgcolor = "transparent"
+            # Restore tooltips
+            label_ref = self._rail_labels.get(section_id)
+            if label_ref:
+                container.tooltip = label_ref.value
+        self._rail_expanded = False
+
+    def _toggle_rail(self) -> None:
+        """Toggle between collapsed and expanded states (Ctrl+B handler)."""
+        if self._rail_expanded:
+            self._last_section = self._active_section
+            self._active_section = None
+            self._collapse_rail()
+        else:
+            section = self._last_section or "model"
+            self._active_section = section
+            self._expand_rail()
+            self._set_active_section(section)
+        self.page.update()
+
+    def _set_active_section(self, section_id: str | None) -> None:
+        """Show/hide section content, enforce single-expand, update chevrons."""
+        # Hide old section content
+        if self._active_section and self._active_section in self._rail_content_slots:
+            self._rail_content_slots[self._active_section].visible = False
+            self._rail_chevrons[self._active_section].rotate = ft.Rotate(angle=0)
+            self._rail_row_containers[self._active_section].bgcolor = "transparent"
+        # Update active section
+        self._active_section = section_id
+        # Show new section content
+        if section_id and section_id in self._rail_content_slots:
+            self._rail_content_slots[section_id].visible = True
+            self._rail_chevrons[section_id].rotate = ft.Rotate(angle=math.pi / 2)
+            self._rail_row_containers[section_id].bgcolor = Colors.SURFACE_RAISED
+        self.page.update()
+
+    def _on_rail_section_click(self, section_id: str) -> None:
+        """Handle a Rail_Row click — expand rail if collapsed, toggle section accordion."""
+        if section_id == "settings":
+            self.preferences_window.open()
+            return
+        if not self._rail_expanded:
+            self._rail_expanded = True
+            self._expand_rail()
+            self._set_active_section(section_id)
+        elif self._active_section == section_id:
+            self._set_active_section(None)
+        else:
+            self._set_active_section(section_id)
+        self.page.update()
+
+    # ------------------------------------------------------------------ #
+    #  Build
+    # ------------------------------------------------------------------ #
+
+    # ------------------------------------------------------------------ #
+    #  Keyboard shortcuts
+    # ------------------------------------------------------------------ #
+
+    def _on_keyboard_event(self, e: ft.KeyboardEvent):
+        """Global keyboard handler. Ctrl+, opens Preferences, Ctrl+B toggles rail."""
+        try:
+            if e.ctrl and e.key == ",":
+                self.preferences_window.open()
+            elif e.ctrl and e.key == "B":
+                self._toggle_rail()
+        except Exception:
+            _log(f"Keyboard event error: {traceback.format_exc()}")
+
+
+
+    # ------------------------------------------------------------------ #
     #  Build
     # ------------------------------------------------------------------ #
 
     def build(self):
-        from app.components.layout.drag_divider import DragDivider
-        self._main_container = ft.Container(content=ft.Column(
-            [self.tab_bar_container, self.content_container], expand=True, spacing=0
-        ), expand=True)
-        self._sidebar_container = ft.Container(
-            content=self.sidebar.build(), width=288, bgcolor=Colors.SIDEBAR_BG
+        self._main_container = ft.Container(
+            content=ft.Column(
+                [self.tab_bar_container, self.content_container],
+                expand=True,
+                spacing=0,
+            ),
+            expand=True,
         )
-        sidebar_divider = DragDivider(on_drag=self._on_sidebar_drag)
-        return ft.Row([self._main_container, sidebar_divider.build(), self._sidebar_container], expand=True, spacing=0)
 
-    def _on_sidebar_drag(self, delta_x: float):
-        try:
-            current_width = self._sidebar_container.width or 288
-            new_width = max(200, min(450, current_width - delta_x))
-            self._sidebar_container.width = int(new_width)
-            self.page.update()
-        except Exception:
-            pass
+        # Expanding rail (replaces old icon rail + detail panel)
+        self._expanding_rail = self._build_expanding_rail()
+
+        # Menu bar slot
+        self._menu_bar_component = MenuBarComponent(
+            bus=self.bus,
+            actions={
+                "toggle_sidebar": self._toggle_rail,
+                "open_preferences": self.preferences_window.open,
+            },
+        )
+        # We wrap the menu bar in a Container to match the Workspace color
+        menu_bar_slot = ft.Container(
+            content=self._menu_bar_component.build(),
+            bgcolor=Colors.BACKGROUND,
+            padding=ft.padding.only(left=8)  # Aligns text with the tabs below
+        )
+        status_bar_slot = ft.Container(height=0)
+
+        # Body: main content | expanding rail
+        body = ft.Row(
+            [self._main_container, self._expanding_rail],
+            expand=True,
+            spacing=0,
+        )
+
+        page_column = ft.Column(
+            [menu_bar_slot, body, status_bar_slot],
+            expand=True,
+            spacing=0,
+        )
+
+        # Wrap in a Stack so the PreferencesWindow can float on top
+        self._root_stack = ft.Stack(
+            controls=[page_column],
+            expand=True,
+        )
+        self.preferences_window.register_stack(self._root_stack)
+        return self._root_stack

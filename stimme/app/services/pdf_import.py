@@ -1,4 +1,3 @@
-import PyPDF2
 import sys
 import time
 import queue
@@ -89,8 +88,6 @@ class PDFImportService:
         Returns:
             Extracted text
         """
-        print(f" PDF_IMPORT: Starting PDF text extraction from: {file_path}")  # Debug
-        
         # Check for cancellation
         if cancel_callback and cancel_callback():
             raise Exception("PDF processing cancelled")
@@ -100,9 +97,9 @@ class PDFImportService:
         
         try:
             # First try digital extraction with PyPDF2
+            import PyPDF2
             text_parts = []
             with open(file_path, 'rb') as file:
-                print(f" PDF_IMPORT: File opened successfully")  # Debug
                 pdf_reader = PyPDF2.PdfReader(file)
                 
                 # Check for encryption
@@ -114,7 +111,6 @@ class PDFImportService:
                         raise Exception("This PDF is password-protected. Please provide an unencrypted version.")
                 
                 num_pages = len(pdf_reader.pages)
-                print(f" PDF_IMPORT: PDF reader created, pages: {num_pages}")  # Debug
                 
                 if num_pages == 0:
                     raise Exception("This PDF has no pages.")
@@ -127,9 +123,7 @@ class PDFImportService:
                     if cancel_callback and cancel_callback():
                         raise Exception("PDF processing cancelled")
                     
-                    print(f" PDF_IMPORT: Processing page {i+1}")  # Debug
                     text = page.extract_text()
-                    print(f" PDF_IMPORT: Page {i+1} text length: {len(text) if text else 0}")  # Debug
                     if text and text.strip():
                         text_parts.append(text)
                     
@@ -139,11 +133,9 @@ class PDFImportService:
                         progress_callback(f"Processing page {i+1} of {len(pdf_reader.pages)}...", digital_progress)
             
             digital_text = "\n\n".join(text_parts).strip()
-            print(f"✅ PDF_IMPORT: Digital extraction - text length: {len(digital_text)}")  # Debug
             
             # If we got substantial digital text, return it
             if len(digital_text) > 100:  # Reasonable threshold
-                print("✅ PDF_IMPORT: Using digital text extraction")
                 return digital_text
             
             # If digital extraction failed or insufficient, try OCR

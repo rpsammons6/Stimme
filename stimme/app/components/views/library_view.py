@@ -8,7 +8,7 @@ per-chapter progress bars, cost estimate, and translate/cancel controls.
 from __future__ import annotations
 
 import traceback
-from typing import Callable, Dict, List
+from typing import Dict, List
 
 import flet as ft
 

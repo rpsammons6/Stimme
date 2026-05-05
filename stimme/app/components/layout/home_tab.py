@@ -87,7 +87,7 @@ class HomeTab:
                 if self.page.banner:
                     self.page.banner.open = False
                     self.page.update()
-                color = "#FFFFFF" if is_error else Colors.BACKGROUND
+                color = Colors.DESTRUCTIVE_FOREGROUND if is_error else Colors.BACKGROUND
                 bg = Colors.DESTRUCTIVE if is_error else Colors.GOLD
                 self.page.banner = ft.Banner(
                     content=ft.Text(msg, color=color, size=14, selectable=True),
@@ -149,7 +149,7 @@ class HomeTab:
 
             # Get glossary block before spawning thread (safe to read from main thread)
             glossary_mgr = self.actions.get("glossary_manager")
-            glossary_block = glossary_mgr.get_prompt_block() if glossary_mgr else ""
+            glossary_block = glossary_mgr.get_prompt_block(source_text=text) if glossary_mgr else ""
 
             def run_background():
                 try:

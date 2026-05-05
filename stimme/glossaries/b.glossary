@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "b",
+  "author": "",
+  "field_tag": "",
+  "description": "",
+  "created_at": "2026-05-05T23:47:14.157416",
+  "terms": [
+    {
+      "german": "geist",
+      "english": "spirit",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:47:24.472767",
+      "pinned": false
+    },
+    {
+      "german": "ich bin",
+      "english": "i am",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:47:33.335328",
+      "pinned": false
+    }
+  ]
+}

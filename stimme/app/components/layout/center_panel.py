@@ -234,8 +234,8 @@ class CenterPanel:
             _log(f"set_pdf_file: {pdf_file}")
             if self.state:
                 self.state.set_pdf(pdf_file, pdf_path)
-            if pdf_path:
-                self.pdf_viewer.load_pdf(pdf_path, pdf_file)
+            # rebuild_tabs will cleanup the old viewer, create a fresh one,
+            # and reload from state.pdf_path — no need to load here.
             self.rebuild_tabs()
             self.page.update()
         except Exception:
@@ -293,6 +293,15 @@ class CenterPanel:
 
     def rebuild_tabs(self):
         try:
+            # Scrub the old control tree so that lambdas capturing `self`
+            # (tab header on_click handlers) are severed before we build a
+            # new tree.  Without this, the old tree's closure cells keep
+            # CenterPanel → pdf_viewer → WebView_PDF_Viewer alive.
+            if hasattr(self, 'tabs') and self.tabs is not None:
+                from app.components.views.parallel_view import ParallelView
+                ParallelView._scrub_flet_control(self.tabs)
+                self.tabs = None
+
             tab_headers = []
             tab_contents = []
             closeable_indices = set()
@@ -302,6 +311,14 @@ class CenterPanel:
                 tab_headers.append(("System Log", ft.Icons.TERMINAL))
                 tab_contents.append(self.log_tab.build())
             elif self._pdf_file:
+                # Cleanup the old viewer and create a fresh one so no stale
+                # WebView_PDF_Viewer instance survives across rebuild cycles.
+                if self.pdf_viewer is not None:
+                    self.pdf_viewer.cleanup()
+                self.pdf_viewer = WebView_PDF_Viewer(self.page)
+                # Reload the PDF into the fresh viewer if we have a path
+                if self.state and getattr(self.state, 'pdf_path', None):
+                    self.pdf_viewer.load_pdf(self.state.pdf_path, self._pdf_file)
                 tab_headers.append(("PDF", ft.Icons.PICTURE_AS_PDF))
                 tab_contents.append(self._build_pdf_tab())
             else:
@@ -413,20 +430,13 @@ class CenterPanel:
         )
 
     def _build_pdf_tab(self):
-        def _close_pdf(e):
-            try:
-                _log("PDF close button clicked")
-                fn = self.actions.get("global_clear_pdf")
-                if fn:
-                    fn()
-                else:
-                    self.clear_pdf()
-            except Exception:
-                _log(f"ERROR in _close_pdf:\n{traceback.format_exc()}")
+        # Capture only the callable — NOT self — to avoid a closure cell
+        # that would hold CenterPanel → pdf_viewer → WebView_PDF_Viewer alive.
+        _close_fn = self.actions.get("global_clear_pdf") or self.clear_pdf
 
         close_btn = ft.IconButton(
             ft.Icons.CLOSE, icon_size=14, icon_color=Colors.INK_MUTED,
-            on_click=_close_pdf, tooltip="Close PDF",
+            on_click=lambda e, fn=_close_fn: fn(), tooltip="Close PDF",
             width=28, height=28, style=ft.ButtonStyle(padding=ft.padding.all(0)),
         )
         return ft.Column([
@@ -480,9 +490,28 @@ class CenterPanel:
         )
 
     def _build_glossary_content(self):
-        """Build the glossary tab content using GlossaryView."""
-        from app.components.views.glossary_view import GlossaryView
-        return GlossaryView(self.page, actions=self.actions).build()
+        """Build the glossary tab content using the new GlossaryTabView."""
+        from app.components.views.glossary.glossary_tab_view import GlossaryTabView
+
+        glossary_mgr = self.actions.get("glossary_manager")
+        if not glossary_mgr:
+            return ft.Text("Glossary not available.", color=Colors.INK_MUTED)
+
+        # Get the primary active glossary or show empty state
+        primary = glossary_mgr.primary_glossary
+        if primary:
+            tab_view = GlossaryTabView(page=self.page, glossary=primary, actions=self.actions)
+            return tab_view.build()
+        else:
+            # Show empty state
+            return ft.Container(
+                content=ft.Column([
+                    ft.Text("No glossary loaded.", size=14, color=Colors.INK_MUTED, italic=True),
+                    ft.Text("Create or open a glossary from the toolbar or sidebar.", size=12, color=Colors.INK_MUTED),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+                alignment=ft.alignment.center,
+                expand=True,
+            )
 
     def _close_center_tab(self, title: str):
         """Close a closeable center panel tab by title."""
@@ -534,7 +563,6 @@ class CenterPanel:
     def _build_corrections_content(self):
         """Build the corrections tab content using CorrectionsTab."""
         from app.components.tabs.corrections_tab import CorrectionsTab
-        from app.event_bus import EventBus
 
         correction_service = self.actions.get("correction_service")
         # Lazily resolve if not yet initialized

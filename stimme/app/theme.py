@@ -1,7 +1,11 @@
 # Stimme Color Scheme - Dark Mode & Light Mode
 # Palette-driven theming with mode switching support
 
+import logging
+
 import flet as ft
+
+logger = logging.getLogger(__name__)
 
 
 class DarkPalette:
@@ -20,74 +24,135 @@ class DarkPalette:
 
 class LightPalette:
     """Light Mode color palette"""
-    VELLUM = "#FDF7E4"          # Main background and page base
-    EARTHITE = "BBAB8C"         # Sidebar
-    SANDSTONE = "#DED0B6"       # Borders, inputs, and disabled states
-    UMBER = "#503C3C"           # Primary text and icons (High contrast)
+    WHITE = "#FFFFFF"            # Input fields, cards (brightest surface)
+    VELLUM = "#FDF7E4"          # Main background / page base
+    CREAM = "#F5EDD6"           # Slightly raised surfaces / sidebar
+    EARTHITE = "#BBAB8C"        # Muted accents, deep sidebar
+    SANDSTONE = "#DED0B6"       # Borders, dividers, disabled states
     CLAY = "#7E6363"            # Muted text and secondary icons
+    UMBER = "#503C3C"           # Primary text and icons (High contrast)
+    ESPRESSO = "#3A2A2A"        # Brightest/strongest text (CTA equivalent)
+    AMBER = "#C47F17"           # Warning states (darker amber for light bg)
     TERRACOTTA = "#B85C5C"      # Error / Destructive (Warm red)
-    SAGE = "#869363"            # Success (Natural green)
+    SAGE = "#5E7A3A"            # Success (darker sage for light bg contrast)
+
+
+# ---------------------------------------------------------------------------
+# Palette map dictionaries — one entry per semantic token, per mode
+# ---------------------------------------------------------------------------
+
+DARK_MAP: dict[str, str] = {
+    "BACKGROUND": DarkPalette.SHADOW,
+    "FOREGROUND": DarkPalette.BONE,
+    "SURFACE": DarkPalette.FLINT,
+    "SURFACE_RAISED": "#474448",
+    "PRIMARY": DarkPalette.PARCHMENT,
+    "PRIMARY_FOREGROUND": DarkPalette.SHADOW,
+    "SECONDARY": DarkPalette.TAUPE,
+    "SECONDARY_FOREGROUND": DarkPalette.BONE,
+    "MUTED": DarkPalette.FLINT,
+    "MUTED_FOREGROUND": DarkPalette.SILT,
+    "ACCENT": DarkPalette.BONE,
+    "ACCENT_FOREGROUND": DarkPalette.SHADOW,
+    "INK": DarkPalette.PARCHMENT,
+    "INK_MUTED": DarkPalette.SILT,
+    "GOLD": DarkPalette.PARCHMENT,
+    "GOLD_DEEP": DarkPalette.TAUPE,
+    "BORDER": "#4A444A",
+    "INPUT": "#433D42",
+    "DIVIDER": "#433D42",
+    "RING": "#EBE9E0",
+    "SIDEBAR_BG": DarkPalette.OBSIDIAN,
+    "SIDEBAR_FG": "#D4CFC6",
+    "SIDEBAR_PRIMARY": DarkPalette.PARCHMENT,
+    "SIDEBAR_PRIMARY_FG": DarkPalette.SHADOW,
+    "SIDEBAR_ACCENT": DarkPalette.FLINT,
+    "SIDEBAR_ACCENT_FG": DarkPalette.BONE,
+    "SIDEBAR_BORDER": DarkPalette.FLINT,
+    "SIDEBAR_RING": "#EBE9E0",
+    "DESTRUCTIVE": DarkPalette.CRIMSON,
+    "DESTRUCTIVE_FOREGROUND": "#F7F6F3",
+    "WARNING": DarkPalette.AMBER,
+    "WARNING_FOREGROUND": "#1F1A1C",
+    "SUCCESS": DarkPalette.SAGE,
+    "SUCCESS_FOREGROUND": DarkPalette.PARCHMENT,
+}
+
+LIGHT_MAP: dict[str, str] = {
+    "BACKGROUND": LightPalette.VELLUM,
+    "FOREGROUND": LightPalette.UMBER,
+    "SURFACE": LightPalette.WHITE,
+    "SURFACE_RAISED": LightPalette.CREAM,
+    "PRIMARY": LightPalette.ESPRESSO,
+    "PRIMARY_FOREGROUND": LightPalette.VELLUM,
+    "SECONDARY": LightPalette.CREAM,
+    "SECONDARY_FOREGROUND": LightPalette.UMBER,
+    "MUTED": LightPalette.SANDSTONE,
+    "MUTED_FOREGROUND": LightPalette.CLAY,
+    "ACCENT": LightPalette.UMBER,
+    "ACCENT_FOREGROUND": LightPalette.VELLUM,
+    "INK": LightPalette.UMBER,
+    "INK_MUTED": LightPalette.CLAY,
+    "GOLD": LightPalette.ESPRESSO,
+    "GOLD_DEEP": LightPalette.EARTHITE,
+    "BORDER": LightPalette.SANDSTONE,
+    "INPUT": LightPalette.WHITE,
+    "DIVIDER": LightPalette.SANDSTONE,
+    "RING": LightPalette.UMBER,
+    "SIDEBAR_BG": LightPalette.CREAM,
+    "SIDEBAR_FG": LightPalette.UMBER,
+    "SIDEBAR_PRIMARY": LightPalette.ESPRESSO,
+    "SIDEBAR_PRIMARY_FG": LightPalette.VELLUM,
+    "SIDEBAR_ACCENT": LightPalette.SANDSTONE,
+    "SIDEBAR_ACCENT_FG": LightPalette.UMBER,
+    "SIDEBAR_BORDER": LightPalette.SANDSTONE,
+    "SIDEBAR_RING": LightPalette.UMBER,
+    "DESTRUCTIVE": LightPalette.TERRACOTTA,
+    "DESTRUCTIVE_FOREGROUND": LightPalette.WHITE,
+    "WARNING": LightPalette.AMBER,
+    "WARNING_FOREGROUND": LightPalette.ESPRESSO,
+    "SUCCESS": LightPalette.SAGE,
+    "SUCCESS_FOREGROUND": LightPalette.WHITE,
+}
+
+_THEME_LABEL_TO_MODE: dict[str, str] = {
+    "Dunkel": "dark",
+    "Licht": "light",
+}
 
 
 class Colors:
     """Active color tokens — mapped from the current palette.
-    
-    Currently wired to DarkPalette. When theme switching is implemented,
-    these will be reassigned from LightPalette dynamically.
+
+    Call ``Colors.apply("dark")`` or ``Colors.apply("light")`` to switch.
+    Tokens are initialised to the dark palette at import time so that
+    early references (e.g. the loading screen) have valid values.
     """
-    _mode = "dark"  # "dark" or "light" — future toggle
+    _mode = "dark"  # "dark" or "light"
 
-    # --- Dark Mode mappings (active) ---
-    BACKGROUND = DarkPalette.SHADOW
-    FOREGROUND = DarkPalette.BONE
-    SURFACE = DarkPalette.FLINT
-    SURFACE_RAISED = "#474448"          # Slightly lifted from Flint
+    @classmethod
+    def apply(cls, mode: str) -> None:
+        """Rewire all semantic tokens from the given palette.
 
-    # Primary (Parchment)
-    PRIMARY = DarkPalette.PARCHMENT
-    PRIMARY_FOREGROUND = DarkPalette.SHADOW
+        Args:
+            mode: ``"dark"`` or ``"light"``. Invalid values fall back to
+                  ``"dark"`` with a warning.
+        """
+        logger.debug("Colors.apply() called with mode=%r", mode)
+        if mode not in {"dark", "light"}:
+            logger.warning(
+                "Invalid theme mode %r — falling back to 'dark'", mode
+            )
+            mode = "dark"
 
-    # Secondary (Taupe)
-    SECONDARY = DarkPalette.TAUPE
-    SECONDARY_FOREGROUND = DarkPalette.BONE
+        palette_map = DARK_MAP if mode == "dark" else LIGHT_MAP
+        for token_name, color_value in palette_map.items():
+            setattr(cls, token_name, color_value)
+        cls._mode = mode
 
-    # Muted
-    MUTED = DarkPalette.FLINT
-    MUTED_FOREGROUND = DarkPalette.SILT
 
-    # Accent
-    ACCENT = DarkPalette.BONE
-    ACCENT_FOREGROUND = DarkPalette.SHADOW
-
-    # Semantic text
-    INK = DarkPalette.PARCHMENT
-    INK_MUTED = DarkPalette.SILT
-    GOLD = DarkPalette.PARCHMENT
-    GOLD_DEEP = DarkPalette.TAUPE
-
-    # Borders and inputs
-    BORDER = "#4A444A"
-    INPUT = "#433D42"
-    DIVIDER = "#433D42"
-    RING = "#EBE9E0"
-
-    # Sidebar specific
-    SIDEBAR_BG = DarkPalette.OBSIDIAN
-    SIDEBAR_FG = "#D4CFC6"
-    SIDEBAR_PRIMARY = DarkPalette.PARCHMENT
-    SIDEBAR_PRIMARY_FG = DarkPalette.SHADOW
-    SIDEBAR_ACCENT = DarkPalette.FLINT
-    SIDEBAR_ACCENT_FG = DarkPalette.BONE
-    SIDEBAR_BORDER = DarkPalette.FLINT
-    SIDEBAR_RING = "#EBE9E0"
-
-    # Status colors
-    DESTRUCTIVE = DarkPalette.CRIMSON
-    DESTRUCTIVE_FOREGROUND = "#F7F6F3"
-    WARNING = DarkPalette.AMBER
-    WARNING_FOREGROUND = "#1F1A1C"
-    SUCCESS = DarkPalette.SAGE
-    SUCCESS_FOREGROUND = DarkPalette.PARCHMENT
+# Bootstrap: set all tokens from DARK_MAP so early imports have valid values.
+Colors.apply("dark")
 
 
 class Fonts:

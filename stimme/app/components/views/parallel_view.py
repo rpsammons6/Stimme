@@ -304,8 +304,6 @@ class ParallelView:
         If *pin_after_save* is True, the saved term is also pinned to the sidebar
         and the sidebar glossary display is refreshed.
         """
-        from app.theme import UI
-
         glossary_mgr = self._actions.get("glossary_manager")
         if not glossary_mgr:
             if self._page and hasattr(self._page, 'bus'):
@@ -655,7 +653,7 @@ class ParallelView:
 
         # Get glossary block if available
         glossary_mgr = self._actions.get("glossary_manager")
-        glossary_block = glossary_mgr.get_prompt_block() if glossary_mgr else ""
+        glossary_block = glossary_mgr.get_prompt_block(source_text=source_text) if glossary_mgr else ""
 
         self._retranslate_segment = -1
 
@@ -1132,6 +1130,37 @@ class ParallelView:
                     setattr(ctrl, attr, None)
                 except Exception:
                     pass
+        # Explicitly clear GestureDetector event handlers and Flet's internal
+        # attrs keys so that orphaned wrappers don't retain closures capturing
+        # self/index after the parent ListView's controls.clear() severs them.
+        if isinstance(ctrl, ft.GestureDetector):
+            for handler_attr in (
+                'on_tap', 'on_secondary_tap', 'on_double_tap',
+                'on_long_press_start', 'on_long_press_end',
+            ):
+                try:
+                    setattr(ctrl, handler_attr, None)
+                except Exception:
+                    pass
+            # Flet stores property values under unprefixed keys in __attrs
+            for attrs_name in ('_Control__attrs', '_attrs'):
+                d = getattr(ctrl, attrs_name, None)
+                if isinstance(d, dict):
+                    for key in ('tap', 'secondarytap', 'doubletap',
+                                'longpressstart', 'longpressend'):
+                        d.pop(key, None)
+
+        # Release ft.Image data at the leaf level so large base64 strings
+        # are freed even when parent container references are severed first.
+        if isinstance(ctrl, ft.Image):
+            try:
+                ctrl.src_base64 = None
+            except Exception:
+                pass
+            try:
+                ctrl.src = None
+            except Exception:
+                pass
         if hasattr(ctrl, 'content') and ctrl.content is not None:
             ParallelView._scrub_flet_control(ctrl.content)
             try:
@@ -1152,22 +1181,50 @@ class ParallelView:
         from app.mem_debug import log_mem
         log_mem("ParallelView.cleanup START")
 
-        # Recursively scrub all Flet event handlers from the built control tree
-        if self._built_tree is not None:
-            ParallelView._scrub_flet_control(self._built_tree)
-            self._built_tree = None
+        # Diagnostic: how many objects does THIS ParallelView own?
+        n_src = len(self._source_containers)
+        n_tgt = len(self._translation_containers)
+        src_gd = 0
+        tgt_gd = 0
+        if self._source_scroll_col and hasattr(self._source_scroll_col, 'controls'):
+            src_gd = sum(1 for c in self._source_scroll_col.controls if isinstance(c, ft.GestureDetector))
+        if self._translation_scroll_col and hasattr(self._translation_scroll_col, 'controls'):
+            tgt_gd = sum(1 for c in self._translation_scroll_col.controls if isinstance(c, ft.GestureDetector))
+        has_pdf = self._pdf_viewer is not None
+        print(f"[MEM_DEBUG] [cleanup] segments={len(self.segments)} src_containers={n_src} tgt_containers={n_tgt} "
+              f"src_GDs={src_gd} tgt_GDs={tgt_gd} has_pdf_viewer={has_pdf} built_tree={'yes' if self._built_tree else 'no'}")
 
-        # Scrub segment containers (hold _on_compare/_on_accept closures)
+        # ── Phase 1: Scrub GestureDetector wrappers BEFORE the built-tree
+        # scrub orphans them via controls.clear().  The scroll column controls
+        # list contains the GestureDetector wrappers that wrap each segment
+        # container; scrubbing them here ensures their on_tap / on_secondary_tap
+        # / on_double_tap handlers are cleared while the wrappers are still
+        # reachable.
+        for scroll_col in (self._source_scroll_col, self._translation_scroll_col):
+            if scroll_col is not None and hasattr(scroll_col, 'controls') and isinstance(scroll_col.controls, list):
+                for wrapper in list(scroll_col.controls):
+                    if isinstance(wrapper, ft.GestureDetector):
+                        ParallelView._scrub_flet_control(wrapper)
+
+        # ── Phase 2: Scrub segment containers (hold _on_compare / _on_accept
+        # closures) while they are still reachable from the scroll columns.
         for c in self._source_containers:
             ParallelView._scrub_flet_control(c)
         for c in self._translation_containers:
             ParallelView._scrub_flet_control(c)
 
-        # Scrub scroll columns
-        if self._source_scroll_col is not None:
-            ParallelView._scrub_flet_control(self._source_scroll_col)
-        if self._translation_scroll_col is not None:
-            ParallelView._scrub_flet_control(self._translation_scroll_col)
+        # ── Phase 3: Now scrub the full built control tree.  At this point
+        # the leaf-level handlers have already been cleared, so the recursive
+        # walk only needs to sever structural references (content / controls).
+        if self._built_tree is not None:
+            ParallelView._scrub_flet_control(self._built_tree)
+            self._built_tree = None
+
+        # Diagnostic: count after scrub phases (before dropping other refs)
+        gc.collect()
+        _gd_after = sum(1 for o in gc.get_objects() if isinstance(o, ft.GestureDetector))
+        _img_after = sum(1 for o in gc.get_objects() if isinstance(o, ft.Image))
+        print(f"[MEM_DEBUG] [cleanup post-scrub] GestureDetectors={_gd_after} ft.Images={_img_after}")
 
         # Cleanup PDF viewer
         if self._pdf_viewer is not None:
@@ -1183,30 +1240,24 @@ class ParallelView:
                 pass
             self._file_picker = None
 
-        # Fallback: iterate overlay to remove any stale FilePicker whose
-        # on_result is a bound method on this instance (handles cases where
-        # self._file_picker was already removed or replaced).
+        # Drain page.overlay of ALL orphaned FilePicker instances.
+        # Preserve only the shell's export_picker (passed via actions).
+        # This handles stale pickers from prior ParallelView cycles whose
+        # on_result was already cleared or whose owning view was destroyed.
         if self._page is not None:
             try:
-                stale_pickers = []
-                for ctrl in self._page.overlay:
-                    if isinstance(ctrl, ft.FilePicker):
-                        handler = getattr(ctrl, "on_result", None)
-                        if handler is not None and getattr(handler, "__self__", None) is self:
-                            stale_pickers.append(ctrl)
-                for picker in stale_pickers:
-                    picker.on_result = None
-                    try:
-                        self._page.overlay.remove(picker)
-                    except (ValueError, Exception):
-                        pass
+                export_picker = self._actions.get("export_picker")
+                self._page.overlay[:] = [
+                    ctrl for ctrl in self._page.overlay
+                    if not isinstance(ctrl, ft.FilePicker)
+                    or ctrl is export_picker
+                ]
             except Exception:
                 pass
 
         # Remove stale AlertDialogs from overlay
         if self._page is not None:
             try:
-                import flet as ft
                 self._page.overlay[:] = [
                     c for c in self._page.overlay
                     if not isinstance(c, ft.AlertDialog)

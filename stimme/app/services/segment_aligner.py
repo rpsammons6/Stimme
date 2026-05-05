@@ -39,18 +39,10 @@ class SegmentAligner:
                 for i, (s, t) in enumerate(zip(src_paras, tgt_paras))
             ]
 
-        # Paragraph counts differ — fall back to sentence-level alignment
-        src_sents = self._split_sentences(source)
-        tgt_sents = self._split_sentences(translation)
-
-        if len(src_sents) == len(tgt_sents):
-            return [
-                SegmentPair(index=i, source_text=s, translation_text=t)
-                for i, (s, t) in enumerate(zip(src_sents, tgt_sents))
-            ]
-
-        # Sentence counts differ — proportional mapping
-        return self._proportional_map(src_sents, tgt_sents)
+        # Paragraph counts differ — use proportional paragraph mapping.
+        # This keeps chunks large and readable rather than fragmenting
+        # into individual sentences which destroys visual alignment.
+        return self._proportional_map(src_paras, tgt_paras)
 
     def _split_paragraphs(self, text: str) -> List[str]:
         """Split text on double newlines, stripping whitespace and dropping empties."""
@@ -98,7 +90,7 @@ class SegmentAligner:
         """Map segments proportionally when counts don't match.
 
         The shorter list drives the pair count. Extra segments from the longer
-        list are distributed evenly across pairs (joined with spaces).
+        list are distributed evenly across pairs (joined with paragraph breaks).
         """
         if not src_segments and not tgt_segments:
             return []
@@ -118,7 +110,7 @@ class SegmentAligner:
             # Calculate the slice of the longer list that maps to this index
             start = (i * len(long)) // n
             end = ((i + 1) * len(long)) // n
-            merged = " ".join(long[start:end])
+            merged = "\n\n".join(long[start:end])
 
             if src_is_short:
                 pairs.append(SegmentPair(index=i, source_text=short[i], translation_text=merged))

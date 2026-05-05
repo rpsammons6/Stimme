@@ -1,32 +1,21 @@
 import flet as ft
 import threading
-import time
+import traceback
 import os
-import sys
 from pathlib import Path
 from app.shell import AppShell
-from app.theme import Colors, Fonts, UI
+from app.theme import Colors, Fonts
 from app.components.shared.loading_screen import LoadingScreen
+from app.services.configuration_service import ConfigurationService
 
 # Set BASE_DIR as anchor for all paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Global flags to track state
-models_loaded = False
+# Global reference for loading screen
 loading_screen = None
 
-def preload_models():
-    """Preload ML models in background to avoid cold start delays.
-    
-    NOTE: Disabled — the LLMBackendRouter lazily initializes TranslationBrain
-    on first translate() call, so preloading here just creates a throwaway
-    instance that wastes RAM and startup time.
-    """
-    global models_loaded
-    models_loaded = True
-
 def main(page: ft.Page):
-    global loading_screen, models_loaded
+    global loading_screen
     
     page.title = "Stimme"
     page.window.min_width = 1000
@@ -53,30 +42,44 @@ def main(page: ft.Page):
             primary=Colors.GOLD,
             surface=Colors.SURFACE,
             background=Colors.BACKGROUND,
-        )
+        ),
+        splash_color=ft.Colors.TRANSPARENT,
     )
     
     # 1. Show the Loading Screen immediately
     loading_screen = LoadingScreen(page)
     loading_screen.show("Consulting the archives...", fullpage=True)
     
-    # 2. Start preloading models
-    if not models_loaded:
-        threading.Thread(target=preload_models, daemon=True).start()
-    
-    # 3. Transition to Shell
+    # 2. Transition to Shell
     def initialize_app():
         try:
-            start_time = time.time()
-            # Wait for models or 15s timeout
-            while not models_loaded and (time.time() - start_time) < 15:
-                time.sleep(0.2)
+            # Apply theme from persisted settings BEFORE creating AppShell,
+            # so every component initializes with the correct palette.
+            theme_mode = ConfigurationService.get_early_theme(Path(BASE_DIR))
+            Colors.apply(theme_mode)
+            page.theme_mode = ft.ThemeMode.DARK if theme_mode == "dark" else ft.ThemeMode.LIGHT
+            page.bgcolor = Colors.BACKGROUND
+            page.theme = ft.Theme(
+                font_family="CormorantGaramond",
+                use_material3=True,
+                color_scheme=ft.ColorScheme(
+                    primary=Colors.GOLD,
+                    surface=Colors.SURFACE,
+                    background=Colors.BACKGROUND,
+                ),
+                splash_color=ft.Colors.TRANSPARENT,
+            )
             
+            # Create the AppShell — all components now init with correct colors
+            app_shell = AppShell(page)
+            
+            # Mount the UI before recovery dialogs so the shell is visible
+            page.add(app_shell.build())
+            page.update()
+            
+            # Hide loading screen after AppShell is built and mounted
             if loading_screen:
                 loading_screen.hide()
-            
-            # Create the AppShell
-            app_shell = AppShell(page)
             
             # Check for session recovery
             state_service = app_shell.state_service
@@ -181,40 +184,7 @@ def main(page: ft.Page):
                 
                 if glossary_accepted[0]:
                     entries = app_shell.glossary_journal.read_entries()
-                    glossary_paths_checked = {}
-                    
-                    for entry in entries:
-                        glossary_path = entry.glossary_path
-                        
-                        # Cache path existence checks
-                        if glossary_path not in glossary_paths_checked:
-                            glossary_paths_checked[glossary_path] = Path(glossary_path).exists()
-                        
-                        if not glossary_paths_checked[glossary_path]:
-                            app_shell.bus.show_banner(
-                                f"Error: Glossary not found at {glossary_path}",
-                                is_error=True,
-                            )
-                            continue
-                        
-                        if entry.operation == "add":
-                            term_data = entry.term_data
-                            app_shell.glossary_manager.add_term(
-                                german=term_data.get("german", ""),
-                                english=term_data.get("english", ""),
-                                context_target=term_data.get("context_target", ""),
-                                field_tag=term_data.get("field_tag", ""),
-                                nuance_note=term_data.get("nuance_note", ""),
-                            )
-                        elif entry.operation == "remove":
-                            term_data = entry.term_data
-                            app_shell.glossary_manager.remove_term(
-                                german=term_data.get("german", ""),
-                            )
-                    
-                    # Save glossary and reset journal after applying all entries
-                    app_shell.glossary_manager.save()
-                    app_shell.glossary_journal.reset()
+                    app_shell.glossary_manager.apply_journal_recovery(entries)
                 else:
                     app_shell.glossary_journal.reset()
             
@@ -224,13 +194,9 @@ def main(page: ft.Page):
             # Setup the close handling
             setup_window_close_handling(page, app_shell)
             
-            # Add the Shell build to the page
-            page.add(app_shell.build())
-            page.update()
             print("✅ MAIN: App initialized successfully")
         except Exception as e:
             print(f"❌ MAIN: Fatal error during initialization: {e}")
-            import traceback
             traceback.print_exc()
             # Show a minimal error state so the user knows something went wrong
             try:
@@ -252,9 +218,11 @@ def setup_window_close_handling(page: ft.Page, app_shell: AppShell):
     def on_window_event(e):
         if e.data == "close":
             try:
-                # Check centralized state for unsaved content
                 if app_shell.state.has_unsaved_content:
-                    show_exit_confirmation(page, app_shell)
+                    if app_shell.state.has_dirty_glossaries:
+                        show_glossary_exit_dialog(page, app_shell)
+                    else:
+                        show_session_exit_dialog(page, app_shell)
                 else:
                     _safe_exit(page, app_shell)
             except Exception as ex:
@@ -287,24 +255,38 @@ def _safe_exit(page: ft.Page, app_shell: AppShell):
         page.window.destroy()
     except (AssertionError, Exception):
         # Flet's internal update can fail during teardown — just force quit
-        import os
         os._exit(0)
 
 
-def show_exit_confirmation(page: ft.Page, app_shell: AppShell):
-    """Displays the final warning dialog"""
-    
+def show_glossary_exit_dialog(page: ft.Page, app_shell: AppShell):
+    """Three-button dialog when glossaries have unsaved changes."""
+    count = app_shell.get_dirty_glossary_count()
+    msg = f"You have {count} unsaved glossar{'y' if count == 1 else 'ies'}. Save before exiting?"
+
     def on_stay(e):
         try:
-            exit_dialog.open = False
+            dialog.open = False
             page.update()
         except Exception:
             pass
-    
-    def on_confirm_exit(e):
-        # Don't bother closing the dialog cleanly — just exit immediately
+
+    def on_discard(e):
         _safe_exit(page, app_shell)
-    
+
+    def on_save_exit(e):
+        success, error = app_shell.save_all_dirty_glossaries()
+        if success:
+            # Also save session state (best-effort)
+            try:
+                app_shell.state_service.save_snapshot()
+            except Exception:
+                pass
+            _safe_exit(page, app_shell)
+        else:
+            dialog.open = False
+            page.update()
+            app_shell.bus.show_banner(error, is_error=True)
+
     # Close any existing dialog first to prevent stomping
     try:
         if page.dialog and hasattr(page.dialog, 'open'):
@@ -312,27 +294,73 @@ def show_exit_confirmation(page: ft.Page, app_shell: AppShell):
             page.update()
     except Exception:
         pass
-    
-    exit_dialog = ft.AlertDialog(
+
+    dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Unsaved Work", font_family=Fonts.HEADER),
-        content=ft.Text(
-            "You have unsaved text or a PDF loaded. Exit anyway?",
-            font_family=Fonts.SERIF,
-            size=14,
-        ),
+        title=ft.Text("Unsaved Glossaries", font_family=Fonts.HEADER),
+        content=ft.Text(msg, font_family=Fonts.SERIF, size=14),
         actions=[
             ft.TextButton("Stay", on_click=on_stay),
+            ft.TextButton("Discard & Exit", on_click=on_discard),
             ft.ElevatedButton(
-                "Exit Stimme",
-                on_click=on_confirm_exit,
-                bgcolor=Colors.DESTRUCTIVE,
-                color=Colors.FOREGROUND,
+                "Save & Exit",
+                on_click=on_save_exit,
+                bgcolor=Colors.GOLD,
+                color=Colors.BACKGROUND,
             ),
         ],
     )
-    page.dialog = exit_dialog
-    exit_dialog.open = True
+    page.dialog = dialog
+    dialog.open = True
+    page.update()
+
+
+def show_session_exit_dialog(page: ft.Page, app_shell: AppShell):
+    """Three-button dialog when only text/PDF is unsaved (no dirty glossaries)."""
+    msg = "You have unsaved text or a PDF loaded. Save your session before exiting?"
+
+    def on_stay(e):
+        try:
+            dialog.open = False
+            page.update()
+        except Exception:
+            pass
+
+    def on_discard(e):
+        _safe_exit(page, app_shell)
+
+    def on_save_session_exit(e):
+        try:
+            app_shell.state_service.save_snapshot()
+        except Exception:
+            pass  # Best-effort; don't block exit for session save failure
+        _safe_exit(page, app_shell)
+
+    # Close any existing dialog first to prevent stomping
+    try:
+        if page.dialog and hasattr(page.dialog, 'open'):
+            page.dialog.open = False
+            page.update()
+    except Exception:
+        pass
+
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Unsaved Work", font_family=Fonts.HEADER),
+        content=ft.Text(msg, font_family=Fonts.SERIF, size=14),
+        actions=[
+            ft.TextButton("Stay", on_click=on_stay),
+            ft.TextButton("Discard & Exit", on_click=on_discard),
+            ft.ElevatedButton(
+                "Save Session & Exit",
+                on_click=on_save_session_exit,
+                bgcolor=Colors.GOLD,
+                color=Colors.BACKGROUND,
+            ),
+        ],
+    )
+    page.dialog = dialog
+    dialog.open = True
     page.update()
 
 # This part ensures the app runs when main.py is executed

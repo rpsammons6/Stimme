@@ -1,0 +1,562 @@
+{
+  "schema_version": 1.0,
+  "tabs": [
+    {
+      "id": "interface",
+      "label": "Interface",
+      "header_fraktur": "Oberfläche",
+      "sections": [
+        {
+          "title": "Aesthetics",
+          "settings": [
+            {
+              "id": "theme",
+              "label": "Visual Mode",
+              "type": "dropdown",
+              "config_layer": "global",
+              "options": ["Dunkel", "Licht"],
+              "default": "Dunkel",
+              "help_text": "Switch between Dark and Light palettes."
+            },
+            {
+              "id": "ui_language",
+              "label": "System Language",
+              "type": "dropdown",
+              "config_layer": "global",
+              "options": ["English", "Deutsch"],
+              "default": "English",
+              "requires_restart": true,
+              "help_text": "Restart required for language change to take effect."
+            },
+            {
+              "id": "import_language",
+              "label": "Import Language Pack",
+              "type": "button",
+              "config_layer": "global",
+              "action": "import_language_pack",
+              "style": "default"
+            }
+          ]
+        },
+        {
+          "title": "Diagnostics",
+          "settings": [
+            {
+              "id": "diagnostics_hud",
+              "label": "Show Diagnostics HUD",
+              "type": "switch",
+              "config_layer": "global",
+              "default": false,
+              "help_text": "Overlay RAM/CPU/GPU usage in the top-left corner."
+            },
+            {
+              "id": "console_log_enabled",
+              "label": "Enable Console Logging",
+              "type": "switch",
+              "config_layer": "global",
+              "default": false
+            },
+            {
+              "id": "console_log_filter",
+              "label": "Log Filter Categories",
+              "type": "dropdown",
+              "config_layer": "global",
+              "options": ["All", "Errors Only", "Warnings", "Translation", "OCR", "RAG"],
+              "default": "All",
+              "visible_if": "console_log_enabled"
+            }
+          ]
+        },
+        {
+          "title": "Keyboard Shortcuts",
+          "settings": [
+            {
+              "id": "hotkey_map",
+              "label": "Hotkey Editor",
+              "type": "text_field",
+              "config_layer": "global",
+              "default": "",
+              "help_text": "Modify keyboard shortcut bindings (JSON format)."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "library",
+      "label": "Library",
+      "header_fraktur": "Bibliothek",
+      "sections": [
+        {
+          "title": "RAG Retrieval",
+          "settings": [
+            {
+              "id": "vector_distance_threshold",
+              "label": "Vector Distance Threshold",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 0.0,
+              "max": 2.0,
+              "step": 0.05,
+              "default": 0.5,
+              "help_text": "Maximum cosine distance for RAG context matches."
+            },
+            {
+              "id": "context_limit",
+              "label": "Context Limit (k-value)",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 1,
+              "max": 50,
+              "step": 1,
+              "default": 5,
+              "help_text": "Number of context matches to retrieve per query."
+            }
+          ]
+        },
+        {
+          "title": "VAD Multipliers",
+          "settings": [
+            {
+              "id": "vad_enabled",
+              "label": "Enable VAD Sentiment Analysis",
+              "type": "switch",
+              "config_layer": "persona",
+              "default": true,
+              "help_text": "Use RoBERTa emotion model to influence translation word choice."
+            },
+            {
+              "id": "valence_multiplier",
+              "label": "Valence (Positivity)",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 0.0,
+              "max": 2.0,
+              "step": 0.05,
+              "default": 1.0,
+              "visible_if": "vad_enabled",
+              "help_text": "Below 1.0 = more negative tone, above 1.0 = more positive."
+            },
+            {
+              "id": "arousal_multiplier",
+              "label": "Arousal (Vividness)",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 0.0,
+              "max": 2.0,
+              "step": 0.05,
+              "default": 1.0,
+              "visible_if": "vad_enabled",
+              "help_text": "Controls vividness of verbs and descriptions."
+            },
+            {
+              "id": "dominance_multiplier",
+              "label": "Dominance (Authority)",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 0.0,
+              "max": 2.0,
+              "step": 0.05,
+              "default": 1.0,
+              "visible_if": "vad_enabled",
+              "help_text": "Controls active vs. passive voice tendency."
+            },
+            {
+              "id": "reset_vad",
+              "label": "Reset VAD Multipliers",
+              "type": "button",
+              "config_layer": "persona",
+              "action": "reset_vad",
+              "style": "default",
+              "visible_if": "vad_enabled"
+            }
+          ]
+        },
+        {
+          "title": "Memory",
+          "settings": [
+            {
+              "id": "cross_chunk_memory",
+              "label": "Cross-Chunk Memory",
+              "type": "switch",
+              "config_layer": "persona",
+              "default": true,
+              "help_text": "Enable recursive cross-chunk referencing for bulk translations. Auto-disabled when local LLM mode is active."
+            }
+          ]
+        },
+        {
+          "title": "LanceDB Maintenance",
+          "settings": [
+            {
+              "id": "optimize_lancedb",
+              "label": "Optimize Database",
+              "type": "button",
+              "config_layer": "global",
+              "action": "optimize_lancedb",
+              "style": "default",
+              "help_text": "Run vacuum operation to shrink ghost data in the vector store."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ai_settings",
+      "label": "AI Settings",
+      "header_fraktur": "Künstliche Intelligenz",
+      "sections": [
+        {
+          "title": "Model Selection",
+          "settings": [
+            {
+              "id": "llm_backend",
+              "label": "Enable Eigenstimme (Local Mode)",
+              "type": "switch",
+              "config_layer": "global",
+              "default": false,
+              "help_text": "Switch between Claude (cloud) and local LLM models."
+            },
+            {
+              "id": "local_llm_endpoint",
+              "label": "Local LLM Endpoint URL",
+              "type": "text_field",
+              "config_layer": "global",
+              "default": "http://localhost:11434",
+              "visible_if": "llm_backend",
+              "help_text": "The URL of your local LLM server (e.g. Ollama)."
+            },
+            {
+              "id": "local_llm_model",
+              "label": "Local Model Name",
+              "type": "text_field",
+              "config_layer": "global",
+              "default": "llama3",
+              "visible_if": "llm_backend",
+              "help_text": "The model identifier to use with the local server."
+            },
+            {
+              "id": "local_llm_timeout",
+              "label": "Request Timeout (seconds)",
+              "type": "slider",
+              "config_layer": "global",
+              "min": 1,
+              "max": 600,
+              "step": 1,
+              "default": 120,
+              "visible_if": "llm_backend"
+            }
+          ]
+        },
+        {
+          "title": "Hyperparameters",
+          "settings": [
+            {
+              "id": "temperature",
+              "label": "Temperature (Creativity)",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 0.1,
+              "max": 1.0,
+              "step": 0.05,
+              "default": 0.7
+            },
+            {
+              "id": "max_tokens",
+              "label": "Max Token Budget",
+              "type": "slider",
+              "config_layer": "persona",
+              "min": 1,
+              "max": 100000,
+              "step": 256,
+              "default": 4096
+            }
+          ]
+        },
+        {
+          "title": "The Constitution",
+          "settings": [
+            {
+              "id": "master_prompt",
+              "label": "Master Prompt Instructions",
+              "type": "textarea",
+              "config_layer": "persona",
+              "default": "",
+              "placeholder": "Enter additional scholarly directives here...",
+              "help_text": "Modify the AI's scholarly constitution prompt. Applied to both cloud and local modes."
+            }
+          ]
+        },
+        {
+          "title": "API Key Management",
+          "settings": [
+            {
+              "id": "api_key",
+              "label": "Anthropic API Key",
+              "type": "password_field",
+              "config_layer": "global",
+              "default": "",
+              "placeholder": "sk-ant-..."
+            },
+            {
+              "id": "remember_api_key",
+              "label": "Remember API Key",
+              "type": "switch",
+              "config_layer": "global",
+              "default": true,
+              "help_text": "Store the API key in the OS keyring for future sessions."
+            },
+            {
+              "id": "secure_my_key",
+              "label": "Secure My Key",
+              "type": "button",
+              "config_layer": "global",
+              "action": "migrate_key_to_keyring",
+              "style": "default",
+              "help_text": "Migrate your API key from .env file to the OS keyring (encrypted at rest)."
+            }
+          ]
+        },
+        {
+          "title": "Preset Manager",
+          "settings": [
+            {
+              "id": "save_preset",
+              "label": "Save Current Persona",
+              "type": "button",
+              "config_layer": "persona",
+              "action": "save_persona",
+              "style": "default",
+              "help_text": "Export the current persona settings as a .stimme file."
+            },
+            {
+              "id": "load_preset",
+              "label": "Load Persona",
+              "type": "button",
+              "config_layer": "persona",
+              "action": "load_persona",
+              "style": "default",
+              "help_text": "Import a .stimme file and mount it as the active persona."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "system",
+      "label": "System",
+      "header_fraktur": "Infrastruktur",
+      "sections": [
+        {
+          "title": "OCR Fine-Tuning",
+          "settings": [
+            {
+              "id": "ocr_language",
+              "label": "Fraktur OCR Mode",
+              "type": "switch",
+              "config_layer": "global",
+              "default": false,
+              "help_text": "Switch between standard German (deu) and 19th-century blackletter (deu_frak) Tesseract packs."
+            },
+            {
+              "id": "ocr_dpi_scale",
+              "label": "DPI Scaling Factor",
+              "type": "slider",
+              "config_layer": "global",
+              "min": 1.0,
+              "max": 4.0,
+              "step": 0.1,
+              "default": 2.0,
+              "help_text": "Tesseract performs best at 300-600 DPI. Scale low-res scans up."
+            },
+            {
+              "id": "ocr_denoise_intensity",
+              "label": "Denoising Intensity",
+              "type": "slider",
+              "config_layer": "global",
+              "min": 0,
+              "max": 10,
+              "step": 1,
+              "default": 2,
+              "help_text": "Median blur / non-local means denoising before OCR. 0 = none."
+            },
+            {
+              "id": "ocr_binarization_threshold",
+              "label": "Binarization Threshold",
+              "type": "slider",
+              "config_layer": "global",
+              "min": 0,
+              "max": 255,
+              "step": 1,
+              "default": 127,
+              "help_text": "Convert grayscale to pure black/white. 127 = auto."
+            },
+            {
+              "id": "ocr_contrast_enhancement",
+              "label": "Contrast Enhancement",
+              "type": "slider",
+              "config_layer": "global",
+              "min": 1.0,
+              "max": 3.0,
+              "step": 0.1,
+              "default": 1.5,
+              "help_text": "Multiply pixel intensity to sharpen faded ink."
+            }
+          ]
+        },
+        {
+          "title": "Network",
+          "settings": [
+            {
+              "id": "proxy_http",
+              "label": "HTTP Proxy",
+              "type": "text_field",
+              "config_layer": "global",
+              "default": "",
+              "placeholder": "http://proxy.university.edu:8080",
+              "help_text": "HTTP proxy for university firewall navigation."
+            },
+            {
+              "id": "proxy_socks",
+              "label": "SOCKS Proxy",
+              "type": "text_field",
+              "config_layer": "global",
+              "default": "",
+              "placeholder": "socks5://proxy.university.edu:1080"
+            }
+          ]
+        },
+        {
+          "title": "Display",
+          "settings": [
+            {
+              "id": "show_billing_info",
+              "label": "Show Billing Information",
+              "type": "switch",
+              "config_layer": "global",
+              "default": false,
+              "help_text": "Display API usage costs in the translation output."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "file_paths",
+      "label": "File Paths",
+      "header_fraktur": "Dateipfade",
+      "sections": [
+        {
+          "title": "Engine Binaries",
+          "settings": [
+            {
+              "id": "tesseract_path",
+              "label": "Tesseract Executable",
+              "type": "file_picker",
+              "config_layer": "global",
+              "pick_folders": false,
+              "allowed_extensions": ["exe"],
+              "default": "",
+              "help_text": "Path to the Tesseract OCR binary."
+            },
+            {
+              "id": "poppler_path",
+              "label": "Poppler Binaries Directory",
+              "type": "file_picker",
+              "config_layer": "global",
+              "pick_folders": true,
+              "default": "",
+              "help_text": "Path to the Poppler bin directory for PDF rendering."
+            }
+          ]
+        },
+        {
+          "title": "Data Directories",
+          "settings": [
+            {
+              "id": "export_directory",
+              "label": "Default Export Directory",
+              "type": "file_picker",
+              "config_layer": "global",
+              "pick_folders": true,
+              "default": "~/Documents/Stimme Exports"
+            },
+            {
+              "id": "datasets_directory",
+              "label": "Datasets Directory",
+              "type": "file_picker",
+              "config_layer": "global",
+              "pick_folders": true,
+              "default": ""
+            },
+            {
+              "id": "history_directory",
+              "label": "History Directory",
+              "type": "file_picker",
+              "config_layer": "global",
+              "pick_folders": true,
+              "default": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "danger_zone",
+      "label": "Danger Zone",
+      "header_fraktur": "Gefahrenzone",
+      "sections": [
+        {
+          "title": "System Reset",
+          "settings": [
+            {
+              "id": "clear_history",
+              "label": "Clear Session History",
+              "type": "button",
+              "config_layer": "global",
+              "action": "clear_history",
+              "style": "danger",
+              "requires_confirmation": true,
+              "help_text": "Delete all JSON session log files."
+            },
+            {
+              "id": "clear_cache",
+              "label": "Clear Cache",
+              "type": "button",
+              "config_layer": "global",
+              "action": "clear_cache",
+              "style": "danger",
+              "requires_confirmation": true,
+              "help_text": "Delete temporary PDF and BERT cache files."
+            },
+            {
+              "id": "wipe_corrections",
+              "label": "Wipe Learned Corrections",
+              "type": "button",
+              "config_layer": "global",
+              "action": "wipe_lancedb",
+              "style": "danger",
+              "requires_confirmation": true,
+              "confirmation_keyword": "DELETE",
+              "help_text": "Permanently delete the LanceDB corrections table. This cannot be undone."
+            }
+          ]
+        },
+        {
+          "title": "System Diagnostics",
+          "settings": [
+            {
+              "id": "dependency_check",
+              "label": "Dependency Health Check",
+              "type": "button",
+              "config_layer": "global",
+              "action": "run_dependency_check",
+              "style": "default",
+              "help_text": "Verify Tesseract, Poppler, ONNX models, LanceDB, and keyring backend status."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

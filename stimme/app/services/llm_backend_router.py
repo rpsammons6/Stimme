@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.services.configuration_service import ConfigurationService
-    from app.services.local_llm_provider import LocalLLMProvider
 
 
 class LLMBackendRouter:

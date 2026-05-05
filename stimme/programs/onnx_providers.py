@@ -218,6 +218,28 @@ class EmbeddingProvider:
                       "falling back to PyTorch")
                 self._init_fallback()
         else:
+            # Attempt auto-download from HuggingFace before falling back
+            try:
+                from model_downloader import ensure_models
+                if ensure_models(base.parent if base.name != "models" else base):
+                    # Re-scan after download
+                    for search_dir in (emb_dir, emb_dir / "onnx"):
+                        quantized = search_dir / "model_quantized.onnx"
+                        full = search_dir / "model.onnx"
+                        candidate = quantized if quantized.is_file() else full
+                        if candidate.is_file():
+                            model_file = candidate
+                            break
+                    if model_file is not None and tokenizer_path.is_file():
+                        self._session = _create_session(model_file, _CPU_PROVIDERS)
+                        self._model_path = model_file
+                        self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
+                        self._tokenizer.enable_truncation(max_length=512)
+                        self._onnx = True
+                        return
+            except Exception as dl_exc:
+                print(f"⚠️  EmbeddingProvider: auto-download failed ({dl_exc})")
+
             print("⚠️  EmbeddingProvider: ONNX model files not found, "
                   "falling back to PyTorch")
             self._init_fallback()
@@ -230,9 +252,9 @@ class EmbeddingProvider:
             from sentence_transformers import SentenceTransformer  # noqa: local
         except ImportError:
             raise ImportError(
-                "ONNX model files not found and PyTorch fallback packages are not installed. "
-                "Run `python programs/export_onnx.py` to export ONNX models first, "
-                "or install dev dependencies: pip install -r requirements-dev.txt"
+                "ONNX embedding model not found and could not be downloaded. "
+                "Please connect to the internet and restart the application, "
+                "or run `python programs/export_onnx.py` with dev dependencies."
             )
         self._fallback_model = SentenceTransformer(
             "intfloat/multilingual-e5-small"
@@ -361,6 +383,28 @@ class EmotionProvider:
                 )
                 self._init_fallback()
         else:
+            # Attempt auto-download from HuggingFace before falling back
+            try:
+                from model_downloader import ensure_models
+                if ensure_models(base.parent if base.name != "models" else base):
+                    # Re-check after download
+                    model_file = quantized if quantized.is_file() else full
+                    if model_file.is_file() and tokenizer_path.is_file() and config_path.is_file():
+                        self._session = _create_session(model_file, _GPU_PROVIDERS)
+                        self._model_path = model_file
+                        self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
+                        self._tokenizer.enable_truncation(max_length=512)
+
+                        with open(config_path, "r", encoding="utf-8") as f:
+                            config = json.load(f)
+                        self._id2label = {
+                            int(k): v for k, v in config["id2label"].items()
+                        }
+                        self._onnx = True
+                        return
+            except Exception as dl_exc:
+                print(f"⚠️  EmotionProvider: auto-download failed ({dl_exc})")
+
             print(
                 "⚠️  EmotionProvider: ONNX model files not found, "
                 "falling back to PyTorch"
@@ -375,9 +419,9 @@ class EmotionProvider:
             from transformers import pipeline  # noqa: local
         except ImportError:
             raise ImportError(
-                "ONNX model files not found and PyTorch fallback packages are not installed. "
-                "Run `python programs/export_onnx.py` to export ONNX models first, "
-                "or install dev dependencies: pip install -r requirements-dev.txt"
+                "ONNX emotion model not found and could not be downloaded. "
+                "Please connect to the internet and restart the application, "
+                "or run `python programs/export_onnx.py` with dev dependencies."
             )
 
         self._fallback_pipe = pipeline(

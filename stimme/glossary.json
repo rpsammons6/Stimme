@@ -1,0 +1,29 @@
+[
+  {
+    "german": "Weltanschauung",
+    "english": "Worldview",
+    "context_target": "Worldview",
+    "field_tag": "N/A",
+    "nuance_note": "N/A",
+    "created_at": "2026-05-06T00:08:58.710239",
+    "pinned": false
+  },
+  {
+    "german": "Dasein",
+    "english": "Being-there",
+    "context_target": "N/A",
+    "field_tag": "N/A",
+    "nuance_note": "N/A",
+    "created_at": "2026-05-06T00:08:58.777361",
+    "pinned": false
+  },
+  {
+    "german": "Geist",
+    "english": "Spirit",
+    "context_target": "N/A",
+    "field_tag": "N/A",
+    "nuance_note": "N/A",
+    "created_at": "2026-05-06T00:08:58.839609",
+    "pinned": false
+  }
+]

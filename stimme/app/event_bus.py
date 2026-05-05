@@ -103,11 +103,11 @@ class EventBus:
                     self.page.update()
 
                 self.page.banner = ft.Banner(
-                    content=ft.Text(message, color="#FFFFFF" if is_error else Colors.BACKGROUND, size=14, selectable=True),
+                    content=ft.Text(message, color=Colors.DESTRUCTIVE_FOREGROUND if is_error else Colors.BACKGROUND, size=14, selectable=True),
                     actions=[ft.TextButton(
                         content=ft.Text("OK", font_family=Fonts.FRAKTUR),
                         on_click=lambda _: self.close_banner(),
-                        style=ft.ButtonStyle(color=Colors.BACKGROUND if not is_error else "#2D232E"),
+                        style=ft.ButtonStyle(color=Colors.BACKGROUND if not is_error else Colors.PRIMARY_FOREGROUND),
                     )],
                     bgcolor=Colors.DESTRUCTIVE if is_error else Colors.GOLD,
                     open=True,

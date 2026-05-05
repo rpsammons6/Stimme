@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "name": "a",
+  "author": "",
+  "field_tag": "",
+  "description": "",
+  "created_at": "2026-05-05T21:49:22.779660",
+  "terms": [
+    {
+      "german": "geist",
+      "english": "spirit",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T21:52:23.731080",
+      "pinned": false
+    },
+    {
+      "german": "habe",
+      "english": "have",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T21:52:33.759804",
+      "pinned": false
+    },
+    {
+      "german": "a",
+      "english": "a",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T22:04:07.797924",
+      "pinned": false
+    },
+    {
+      "german": "ich bin",
+      "english": "i am",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:45:34.810278",
+      "pinned": false
+    },
+    {
+      "german": "du bist",
+      "english": "you are",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:45:43.409533",
+      "pinned": false
+    },
+    {
+      "german": "wir sind",
+      "english": "we are",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:45:52.912479",
+      "pinned": false
+    },
+    {
+      "german": "ich habe",
+      "english": "i have",
+      "context_target": "N/A",
+      "field_tag": "N/A",
+      "nuance_note": "N/A",
+      "created_at": "2026-05-05T23:53:21.479920",
+      "pinned": false
+    }
+  ]
+}

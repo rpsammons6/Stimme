@@ -24,6 +24,10 @@ Pillow>=10.0.0          # Image handling for Tesseract
 flet[all]>=0.25.0,<0.26.0  # Cross-platform desktop UI (pinned to 0.25.x for scroll fix)
 PyPDF2>=3.0.0           # PDF text extraction for UI
 
+# --- GLOSSARY ENGINE ---
+pyahocorasick>=2.0.0    # Aho-Corasick automaton for fast multi-pattern term matching
+rapidfuzz>=3.0.0        # Fuzzy string matching for glossary search UI
+
 # --- FORMATTING & UTILITIES ---
 markdown>=3.4.0         # Converts Claude's output to HTML
 tqdm>=4.65.0            # Progress bars for ingestion

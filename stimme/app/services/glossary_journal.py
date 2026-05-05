@@ -8,7 +8,6 @@ when the glossary is successfully saved to disk.
 
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime
 from pathlib import Path
 
 from app.utils.file_ops import atomic_write

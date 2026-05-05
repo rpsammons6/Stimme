@@ -13,8 +13,6 @@ import logging
 import re
 from typing import Callable, List, Optional
 
-import anthropic
-
 from app.constants import SCOUT_MODEL
 from app.services.configuration_service import ConfigurationService
 from app.models.bulk_models import Chapter
@@ -36,7 +34,7 @@ class ScoutService:
 
     def __init__(self, settings: ConfigurationService):
         self.settings = settings
-        self.client: Optional[anthropic.Anthropic] = None
+        self.client = None  # anthropic.Anthropic, lazily initialized
 
     # ------------------------------------------------------------------
     # Public API
@@ -215,6 +213,7 @@ class ScoutService:
 
         # Recreate client if key changed or not yet initialized
         if self.client is None or getattr(self, '_last_api_key', None) != api_key:
+            import anthropic
             self.client = anthropic.Anthropic(api_key=api_key)
             self._last_api_key = api_key
 
@@ -308,8 +307,6 @@ def _get_pdf_outlines(pdf) -> List[dict]:
         # pdfplumber doesn't expose outlines directly, but the underlying
         # pdfminer resolver does.  We access it via the PDF's catalog.
         from pdfminer.pdftypes import resolve1
-        from pdfminer.pdfparser import PDFParser
-        from pdfminer.pdfdocument import PDFDocument
 
         catalog = pdf.pdf.catalog
         if "Outlines" not in catalog:

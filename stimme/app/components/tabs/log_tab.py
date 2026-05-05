@@ -34,7 +34,7 @@ class LogTab:
 
         self._container = ft.Container(
             expand=True,
-            bgcolor="#2D232E",          # slightly darker than BACKGROUND for terminal feel
+            bgcolor=Colors.BACKGROUND,  # follows active theme
             border_radius=ft.border_radius.only(bottom_left=6, bottom_right=6),
             padding=ft.padding.all(20),
             content=ft.Column(

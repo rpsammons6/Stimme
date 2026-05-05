@@ -7,7 +7,7 @@ and the need for bidirectional syncing between components.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+from typing import Callable, Optional, List, Dict, Any, TYPE_CHECKING
 
 from app.models.version_store import VersionStore
 
@@ -48,6 +48,9 @@ class AppState:
 
         # --- HITL version tracking ---
         self.version_store: VersionStore = VersionStore()
+
+        # --- Dirty state delegation (glossary tabs) ---
+        self._dirty_checker: Callable[[], bool] | None = None
 
     # ------------------------------------------------------------------
     # Serialization
@@ -242,6 +245,17 @@ class AppState:
     # Unsaved content check (for exit confirmation)
     # ------------------------------------------------------------------
 
+    def set_dirty_checker(self, checker: Callable[[], bool]) -> None:
+        """Inject a callable that returns True if any glossary tab is dirty."""
+        self._dirty_checker = checker
+
+    @property
+    def has_dirty_glossaries(self) -> bool:
+        """Convenience property for dialog branching."""
+        return self._dirty_checker() if self._dirty_checker else False
+
     @property
     def has_unsaved_content(self) -> bool:
-        return bool(self.input_text and self.input_text.strip()) or self.has_pdf or self.has_translations
+        ui_dirty = bool(self.input_text and self.input_text.strip()) or self.has_pdf or self.has_translations
+        glossary_dirty = self._dirty_checker() if self._dirty_checker else False
+        return ui_dirty or glossary_dirty

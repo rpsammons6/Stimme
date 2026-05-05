@@ -74,7 +74,7 @@ class InputPanel:
             token_color = Colors.DESTRUCTIVE
             token_status = "TOO LONG"
         elif estimated_tokens > max_tokens * 0.8:
-            token_color = "#F1A355"
+            token_color = Colors.WARNING
             token_status = "NEAR LIMIT"
         else:
             token_color = Colors.INK_MUTED

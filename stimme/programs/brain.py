@@ -401,11 +401,15 @@ class TranslationBrain:
 
         # --- STEP 3: UPDATED EMOTION ANALYSIS (ONNX RoBERTa) ---
         try:
-            results = self.emotion_provider.classify(text[:512], top_k=3)
+            results = self.emotion_provider.classify(text[:512], top_k=6)
+            # Log ALL 6 classes for diagnostics, but only use top 3 downstream
+            all_emotions = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
+            _log(f"🎭 BRAIN: Emotion breakdown (all 6): {', '.join(all_emotions)}")
+            results = results[:3]  # trim to top 3 for the prompt
             emotion_strings = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
             primary_emotion = results[0]['label'].upper()
             emotion_intel = ", ".join(emotion_strings)
-            _log(f"🎭 BRAIN: Detected Emotions: {emotion_intel}")
+            _log(f"🎭 BRAIN: Using top 3: {emotion_intel}")
         except Exception as e:
             _log(f"⚠️  BRAIN: Emotion analysis failed: {e}")
             primary_emotion = "NEUTRAL"
