@@ -97,6 +97,14 @@ class GlossaryToolbar:
             style=ft.ButtonStyle(color=Colors.FOREGROUND),
         )
 
+        make_primary_btn = ft.TextButton(
+            text="Make Primary",
+            icon=ft.Icons.STAR_OUTLINED,
+            on_click=self._on_make_primary,
+            tooltip="Set this glossary as the Primary active glossary for translations",
+            style=ft.ButtonStyle(color=Colors.GOLD),
+        )
+
         self._term_count_text = ft.Text(
             self._format_term_count(),
             size=11,
@@ -115,6 +123,8 @@ class GlossaryToolbar:
                     ft.VerticalDivider(width=1, color=Colors.DIVIDER),
                     save_btn,
                     save_as_btn,
+                    ft.VerticalDivider(width=1, color=Colors.DIVIDER),
+                    make_primary_btn,
                     ft.Container(expand=True),
                     self._term_count_text,
                 ],
@@ -604,6 +614,39 @@ class GlossaryToolbar:
             _log(f"ERROR in Save As:\n{traceback.format_exc()}")
             if bus:
                 bus.show_banner(f"Failed to save glossary: {exc}", is_error=True)
+
+    # ------------------------------------------------------------------
+    # Make Primary
+    # ------------------------------------------------------------------
+
+    def _on_make_primary(self, e) -> None:
+        """Set this glossary as the Primary active glossary for translations."""
+        glossary = self._state.glossary
+        bus = self._actions.get("bus")
+        glossary_mgr = self._actions.get("glossary_manager")
+
+        if not glossary_mgr:
+            _log("MAKE PRIMARY: No glossary_manager in actions")
+            return
+
+        if not glossary.file_path:
+            # Glossary must be saved first
+            if bus:
+                bus.show_banner("Save the glossary first before setting it as Primary.", is_error=True)
+            return
+
+        try:
+            glossary_mgr.set_active(glossary.file_path, slot="primary")
+            _log(f"MAKE PRIMARY: Set '{glossary.name}' as primary glossary")
+
+            if bus:
+                bus.emit("glossary_changed")
+                bus.show_banner(f"'{glossary.name}' is now the Primary Glossary")
+
+        except Exception:
+            _log(f"ERROR in Make Primary:\n{traceback.format_exc()}")
+            if bus:
+                bus.show_banner("Failed to set as Primary Glossary", is_error=True)
 
     # ------------------------------------------------------------------
     # Helpers

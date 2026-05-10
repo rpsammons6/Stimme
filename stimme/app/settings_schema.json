@@ -186,6 +186,20 @@
           ]
         },
         {
+          "title": "Glossary",
+          "settings": [
+            {
+              "id": "glossary_override_strength",
+              "label": "Glossary Authority",
+              "type": "dropdown",
+              "config_layer": "global",
+              "options": ["Strict", "Preferred", "Advisory"],
+              "default": "Strict",
+              "help_text": "How strongly the glossary overrides the AI's judgement. Strict = always use glossary terms. Preferred = use unless context strongly disagrees. Advisory = treat as suggestions."
+            }
+          ]
+        },
+        {
           "title": "LanceDB Maintenance",
           "settings": [
             {

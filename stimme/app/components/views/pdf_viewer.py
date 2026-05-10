@@ -12,7 +12,7 @@ from typing import Optional
 
 import flet as ft
 
-from app.theme import Colors
+from app.theme import Colors, UI
 from programs.pdf_engine import ScholarlyPDFEngine
 
 
@@ -39,8 +39,8 @@ class PDFViewer:
         # UI controls — initialised in build()
         self._image: Optional[ft.Image] = None
         self._page_label: Optional[ft.Text] = None
-        self._prev_btn: Optional[ft.IconButton] = None
-        self._next_btn: Optional[ft.IconButton] = None
+        self._prev_btn: Optional[ft.Container] = None
+        self._next_btn: Optional[ft.Container] = None
         self._error_container: Optional[ft.Container] = None
         self._nav_row: Optional[ft.Row] = None
 
@@ -166,20 +166,18 @@ class PDFViewer:
             visible=True,
         )
 
-        self._prev_btn = ft.IconButton(
-            icon=ft.Icons.CHEVRON_LEFT,
-            icon_color=Colors.FOREGROUND,
-            icon_size=24,
-            disabled=True,
+        self._prev_btn = ft.Container(
+            content=UI.icon("SVGs/noun-arrow-left-5527372.svg", 24),
             on_click=lambda _: self._navigate(self._current_page - 1),
+            ink=True,
+            disabled=True,
         )
 
-        self._next_btn = ft.IconButton(
-            icon=ft.Icons.CHEVRON_RIGHT,
-            icon_color=Colors.FOREGROUND,
-            icon_size=24,
-            disabled=True,
+        self._next_btn = ft.Container(
+            content=UI.icon("SVGs/noun-arrow-right-5527371.svg", 24),
             on_click=lambda _: self._navigate(self._current_page + 1),
+            ink=True,
+            disabled=True,
         )
 
         self._page_label = ft.Text(

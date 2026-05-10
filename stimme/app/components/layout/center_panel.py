@@ -22,11 +22,11 @@ class CenterPanel:
         self.actions = actions or {}
 
         # Icons
-        self.quill_icon = ImgIcon("icon-quill.svg", 28, 28)
-        self.book_icon = ImgIcon("icon-book.svg", 28, 28)
+        self.quill_icon = ImgIcon("SVGs/noun-edit-5527393.svg", 28, 28)
+        self.book_icon = ImgIcon("SVGs/noun-book-5527435.svg", 28, 28)
         self.sun_welcome_icon = ImgIcon("welcome.svg", 28, 28)
-        self.theme_icon = ImgIcon("icon-theme.svg", 28, 28)
-        self.glossary_icon = ImgIcon("icon-book-open.svg", 28, 28)
+        self.theme_icon = ImgIcon("SVGs/noun-puzzle-5441853.svg", 28, 28)
+        self.glossary_icon = ImgIcon("SVGs/noun-database-5527402.svg", 28, 28)
 
         # Components (these are UI objects, not state)
         self.pdf_viewer = WebView_PDF_Viewer(page)
@@ -232,6 +232,11 @@ class CenterPanel:
         """Load a PDF into the viewer and update state."""
         try:
             _log(f"set_pdf_file: {pdf_file}")
+            # Emit pdf_replaced event if replacing an existing PDF
+            if self.state and self.state.pdf_file is not None:
+                bus = self.actions.get("bus")
+                if bus:
+                    bus.emit("pdf_replaced", old_pdf=self.state.pdf_file, new_pdf=pdf_file)
             if self.state:
                 self.state.set_pdf(pdf_file, pdf_path)
             # rebuild_tabs will cleanup the old viewer, create a fresh one,
@@ -263,14 +268,13 @@ class CenterPanel:
         except Exception:
             _log(f"ERROR in set_commentary:\n{traceback.format_exc()}")
 
-    def start_log_session(self):
-        """Switch to terminal log view."""
+    def start_log_session(self, title: str = "Translation Log"):
+        """Switch to terminal log view with a custom header title."""
         try:
             _log("start_log_session called")
             if self.state:
                 self.state.start_log_session()
-            self.log_tab = LogTab(self.page)
-            self.log_tab.append("✨ Brain initializing...")
+            self.log_tab = LogTab(self.page, title=title)
             self.rebuild_tabs()
             self.page.update()
         except Exception:
@@ -280,6 +284,11 @@ class CenterPanel:
         """Return to Welcome/PDF view."""
         try:
             _log("end_log_session called")
+            # Cancel any running benchmark subprocess when leaving the log view
+            # Feature: subprocess-isolation, Requirements: 2.5
+            cancel_benchmark = self.actions.get("cancel_benchmark")
+            if cancel_benchmark:
+                cancel_benchmark()
             if self.state:
                 self.state.end_log_session()
             self.rebuild_tabs()
@@ -311,11 +320,13 @@ class CenterPanel:
                 tab_headers.append(("System Log", ft.Icons.TERMINAL))
                 tab_contents.append(self.log_tab.build())
             elif self._pdf_file:
-                # Cleanup the old viewer and create a fresh one so no stale
-                # WebView_PDF_Viewer instance survives across rebuild cycles.
-                if self.pdf_viewer is not None:
-                    self.pdf_viewer.cleanup()
+                # Create a fresh viewer — the old one is tracked by PDFResourceProvider
+                # and will be cleaned as an orphan on the next Reaper cycle.
                 self.pdf_viewer = WebView_PDF_Viewer(self.page)
+                # Register the new viewer with PDFResourceProvider for Reaper tracking
+                pdf_provider = self.actions.get("pdf_provider")
+                if pdf_provider and self.state and getattr(self.state, 'pdf_path', None):
+                    pdf_provider.register_viewer(self.pdf_viewer, self.state.pdf_path)
                 # Reload the PDF into the fresh viewer if we have a path
                 if self.state and getattr(self.state, 'pdf_path', None):
                     self.pdf_viewer.load_pdf(self.state.pdf_path, self._pdf_file)
@@ -612,6 +623,11 @@ class CenterPanel:
         try:
             _log(f"switch_tab({index})")
             if self._show_logs and index != 0:
+                # Cancel any running benchmark subprocess when navigating away
+                # Feature: subprocess-isolation, Requirements: 2.5
+                cancel_benchmark = self.actions.get("cancel_benchmark")
+                if cancel_benchmark:
+                    cancel_benchmark()
                 if self.state:
                     self.state.show_logs = False
             self._center_tab = index

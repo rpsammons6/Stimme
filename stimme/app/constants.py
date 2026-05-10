@@ -71,14 +71,10 @@ BASE_DIR = Path(__file__).parent.parent.resolve()
 
 # Data directories
 VECTOR_DB_PATH = BASE_DIR / "lancedb_vectors"
-DATA_DIR = BASE_DIR / "data"
-HISTORY_DIR = BASE_DIR / "history"
 PROGRAMS_DIR = BASE_DIR / "programs"
 
 # Ensure directories exist
 VECTOR_DB_PATH.mkdir(exist_ok=True)
-DATA_DIR.mkdir(exist_ok=True)
-HISTORY_DIR.mkdir(exist_ok=True)
 
 # ============================================================================
 # API CONFIGURATION

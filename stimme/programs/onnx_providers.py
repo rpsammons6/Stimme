@@ -80,12 +80,18 @@ def _create_session(
     model_path = str(model_path)
     if providers is None:
         providers = _CPU_PROVIDERS
+    # Filter requested providers against what's actually installed to avoid
+    # UserWarning messages for unavailable providers (e.g. DmlExecutionProvider
+    # on systems without DirectML).  GPU acceleration is preserved when the
+    # provider IS available.
+    available = set(ort.get_available_providers())
+    providers = [p for p in providers if p in available]
+    if not providers:
+        providers = ["CPUExecutionProvider"]
     # Enable memory-mapped weights so the OS pages in only what's needed,
     # keeping RSS low for large models.
     sess_options = ort.SessionOptions()
     sess_options.add_session_config_entry("session.use_mmap", "1")
-    # onnxruntime silently ignores providers it cannot load, so we can
-    # safely pass the full priority list on every platform.
     session = ort.InferenceSession(
         model_path, sess_options=sess_options, providers=providers
     )
@@ -510,3 +516,50 @@ class EmotionProvider:
         results = raw[0] if raw and isinstance(raw[0], list) else raw
         sorted_results = sorted(results, key=lambda x: x["score"], reverse=True)
         return sorted_results[:top_k]
+
+    # -- VAD affective profile ----------------------------------------------
+
+    # Valence-Arousal-Dominance reference table keyed by normalised label.
+    # Covers both the RoBERTa 6-class labels and the DistilBERT variant
+    # ("none of them" ≈ Neutral).
+    _VAD_TABLE: dict[str, tuple[float, float, float]] = {
+        "joy":             (0.9, 0.7, 0.6),
+        "neutral":         (0.5, 0.5, 0.5),
+        "none of them":    (0.5, 0.5, 0.5),  # alias for neutral
+        "sadness":         (0.2, 0.2, 0.2),
+        "fear":            (0.2, 0.8, 0.3),
+        "anger":           (0.2, 0.9, 0.8),
+        "disgust":         (0.1, 0.6, 0.5),
+    }
+
+    def get_affective_profile(self, text: str) -> dict:
+        """Compute a weighted VAD (Valence-Arousal-Dominance) profile.
+
+        Uses the full softmax distribution over emotion classes to produce
+        continuous VAD coordinates via weighted average.
+
+        Args:
+            text: Input text to analyse.
+
+        Returns:
+            Dict with keys ``valence``, ``arousal``, ``dominance`` (floats
+            in [0, 1]) and ``primary_emotion`` (str).
+        """
+        # Get all class probabilities
+        results = self.classify(text, top_k=len(self._VAD_TABLE))
+
+        final_v, final_a, final_d = 0.0, 0.0, 0.0
+        for r in results:
+            label = r["label"].lower()
+            prob = r["score"]
+            v, a, d = self._VAD_TABLE.get(label, (0.5, 0.5, 0.5))
+            final_v += v * prob
+            final_a += a * prob
+            final_d += d * prob
+
+        return {
+            "valence": round(final_v, 3),
+            "arousal": round(final_a, 3),
+            "dominance": round(final_d, 3),
+            "primary_emotion": results[0]["label"] if results else "neutral",
+        }

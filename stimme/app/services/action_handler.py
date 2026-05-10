@@ -17,9 +17,9 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
-from app.constants import BASE_DIR, HISTORY_DIR, VECTOR_DB_PATH
+from app.constants import BASE_DIR, VECTOR_DB_PATH
 
 if TYPE_CHECKING:
     from app.event_bus import EventBus
@@ -208,46 +208,53 @@ class ActionHandler:
     # Dependency health check
     # ------------------------------------------------------------------
 
-    def _do_run_dependency_check(self) -> dict[str, bool]:
+    def _dependency_checks(self) -> list[tuple[str, Callable[[], bool]]]:
+        """Return ordered list of (name, check_fn) tuples for dependency verification."""
+        return [
+            ("tesseract", self._check_tesseract),
+            ("poppler", self._check_poppler),
+            ("onnx_models", self._check_onnx_models),
+            ("lancedb", self._check_lancedb),
+            ("keyring", self._check_keyring),
+        ]
+
+    def _do_run_dependency_check(self, log_callback: Callable[[str], None] | None = None) -> dict[str, bool]:
         """Verify system dependencies and return a status map.
+
+        If log_callback is provided, streams results line by line.
+        Otherwise falls back to banner-only output (backward compatible).
 
         Checks: Tesseract, Poppler, ONNX models, LanceDB, keyring backend.
 
-        Requirement: 8.7
+        Requirements: 3.1, 3.2, 3.3, 3.4, 8.7
         """
-        status: dict[str, bool] = {
-            "tesseract": False,
-            "poppler": False,
-            "onnx_models": False,
-            "lancedb": False,
-            "keyring": False,
-        }
+        emit = log_callback or (lambda line: None)
 
-        # --- Tesseract ---
-        status["tesseract"] = self._check_tesseract()
+        emit("🔍 Running Dependency Health Check...")
+        emit("")
 
-        # --- Poppler ---
-        status["poppler"] = self._check_poppler()
+        status: dict[str, bool] = {}
 
-        # --- ONNX models ---
-        status["onnx_models"] = self._check_onnx_models()
+        for name, check_fn in self._dependency_checks():
+            result = check_fn()
+            status[name] = result
+            icon = "✅" if result else "❌"
+            emit(f"{icon} {name.replace('_', ' ').title()}")
 
-        # --- LanceDB ---
-        status["lancedb"] = self._check_lancedb()
+        emit("")
+        passed = sum(1 for v in status.values() if v)
+        total = len(status)
+        if passed == total:
+            emit(f"✅ All {total} dependencies OK")
+        else:
+            emit(f"⚠️ {passed}/{total} dependencies passed, {total - passed} failed")
 
-        # --- Keyring ---
-        status["keyring"] = self._check_keyring()
-
-        # Build a human-readable report
-        report_lines = []
-        for dep, ok in status.items():
-            icon = "✅" if ok else "❌"
-            report_lines.append(f"{icon} {dep.replace('_', ' ').title()}")
-        report = "  |  ".join(report_lines)
+        # Backward-compatible banner (only when no log_callback)
+        if log_callback is None:
+            report_lines = [f"{'✅' if ok else '❌'} {dep.replace('_', ' ').title()}" for dep, ok in status.items()]
+            self._bus.show_banner(f"Dependency Check: {'  |  '.join(report_lines)}")
 
         logger.info("ActionHandler: dependency check — %s", status)
-        self._bus.show_banner(f"Dependency Check: {report}")
-
         return status
 
     # ------------------------------------------------------------------
@@ -400,7 +407,7 @@ class ActionHandler:
         configured = self._settings.get("history_directory", "")
         if configured:
             return Path(configured)
-        return HISTORY_DIR
+        return BASE_DIR
 
     def _resolve_vector_db_path(self) -> Path:
         """Return the LanceDB vector store path, preferring the configured path."""

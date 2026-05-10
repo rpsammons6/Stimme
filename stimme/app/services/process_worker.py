@@ -23,6 +23,7 @@ class ExtractionMessage:
     PROGRESS: str = field(default="progress", init=False, repr=False)
     RESULT: str = field(default="result", init=False, repr=False)
     ERROR: str = field(default="error", init=False, repr=False)
+    OUTPUT: str = field(default="output", init=False, repr=False)
 
     msg_type: str
     data: dict
@@ -32,6 +33,7 @@ class ExtractionMessage:
 ExtractionMessage.PROGRESS = "progress"
 ExtractionMessage.RESULT = "result"
 ExtractionMessage.ERROR = "error"
+ExtractionMessage.OUTPUT = "output"
 
 
 # ---------------------------------------------------------------------------

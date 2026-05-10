@@ -87,6 +87,12 @@ class TranslationService:
                     cache_control=cache_control,
                     api_key=api_key,
                     glossary_block=glossary_block,
+                    vad_settings={
+                        "enabled": self.settings.get("vad_enabled", True),
+                        "valence_multiplier": self.settings.get("valence_multiplier", 1.0),
+                        "arousal_multiplier": self.settings.get("arousal_multiplier", 1.0),
+                        "dominance_multiplier": self.settings.get("dominance_multiplier", 1.0),
+                    },
                 )
             
             # Execute translation in the thread pool
@@ -156,6 +162,12 @@ class TranslationService:
                 cache_control=cache_control,
                 api_key=api_key,
                 glossary_block=glossary_block,
+                vad_settings={
+                    "enabled": self.settings.get("vad_enabled", True),
+                    "valence_multiplier": self.settings.get("valence_multiplier", 1.0),
+                    "arousal_multiplier": self.settings.get("arousal_multiplier", 1.0),
+                    "dominance_multiplier": self.settings.get("dominance_multiplier", 1.0),
+                },
             )
             
             self.history.add_entry(

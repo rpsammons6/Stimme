@@ -18,13 +18,13 @@ class Sidebar:
         self.actions = actions or {}
 
         # 1. Icons
-        self.monk_icon = UI.icon("icon-monk.svg")
-        self.quill_icon = UI.icon("icon-quill.svg")
-        self.book_icon = UI.icon("icon-book.svg")
-        self.key_icon = UI.icon("icon-key.svg")
-        self.scroll_icon = UI.icon("icon-scroll.svg")
-        self.theme_icon = UI.icon("icon-theme.svg")
-        self.openbook_icon = UI.icon("icon-book-open.svg")
+        self.monk_icon = UI.icon("SVGs/noun-apple-5527427.svg")
+        self.quill_icon = UI.icon("SVGs/noun-edit-5527393.svg")
+        self.book_icon = UI.icon("SVGs/noun-book-5527435.svg")
+        self.key_icon = UI.icon("SVGs/noun-key-5527436.svg")
+        self.scroll_icon = UI.icon("SVGs/noun-folder-5441888.svg")
+        self.theme_icon = UI.icon("SVGs/noun-puzzle-5441853.svg")
+        self.openbook_icon = UI.icon("SVGs/noun-database-5527402.svg")
 
         # 2. Input Fields
         self.export_directory_field = UI.text_field(
@@ -46,13 +46,17 @@ class Sidebar:
         self.remember_api_key_switch = UI.switch(value=settings.get_remember_api_key(), on_change=self.on_remember_api_key_change)
 
         # 4. Buttons
-        self.browse_export_btn = ft.IconButton(
-            icon=ft.Icons.FOLDER_OPEN, icon_color=Colors.FOREGROUND,
-            bgcolor=Colors.SURFACE_RAISED, on_click=self.on_browse_export_directory,
+        self.browse_export_btn = ft.Container(
+            content=UI.icon("SVGs/noun-folder-5441888.svg", 20),
+            on_click=self.on_browse_export_directory,
+            ink=True,
+            border_radius=6,
+            bgcolor=Colors.SURFACE_RAISED,
+            padding=ft.padding.all(8),
         )
         self.add_dataset_btn = ft.Container(
             content=ft.Row([
-                UI.icon("icon-book.svg", size=16),
+                UI.icon("SVGs/noun-database-5527402.svg", size=16),
                 ft.Text("Quick Add", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self.on_add_button_click,
@@ -64,7 +68,7 @@ class Sidebar:
         )
         self.view_datasets_btn = ft.Container(
             content=ft.Row([
-                UI.icon("icon-book-open.svg", size=16),
+                UI.icon("SVGs/noun-database-5527402.svg", size=16),
                 ft.Text("View Datasets", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self._on_view_datasets_click,
@@ -87,10 +91,10 @@ class Sidebar:
         self.datasets_content = ft.Column(controls=[self.datasets_container, ft.Row([self.add_dataset_btn, self.view_datasets_btn], spacing=6)], spacing=8, visible=False)
 
         # Glossary Section
-        self.glossary_icon = UI.icon("icon-book.svg")
+        self.glossary_icon = UI.icon("SVGs/noun-book-5527435.svg")
         self.add_glossary_btn = ft.Container(
             content=ft.Row([
-                UI.icon("icon-edit.svg", size=16),
+                UI.icon("SVGs/noun-edit-5527393.svg", size=16),
                 ft.Text("Quick Add", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self.on_add_glossary_term_click,
@@ -102,7 +106,7 @@ class Sidebar:
         )
         self.view_glossary_btn = ft.Container(
             content=ft.Row([
-                UI.icon("icon-book-open.svg", size=16),
+                UI.icon("SVGs/noun-book-5527435.svg", size=16),
                 ft.Text("View Glossary", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self._on_view_glossary_click,
@@ -144,7 +148,7 @@ class Sidebar:
         # Import/Export buttons
         self.import_glossary_btn = ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.FILE_DOWNLOAD, size=16, color=Colors.GOLD),
+                UI.icon("SVGs/noun-open-folder-5441848.svg", size=16),
                 ft.Text("Import", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self._on_import_glossary_click,
@@ -156,7 +160,7 @@ class Sidebar:
         )
         self.export_glossary_btn = ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.FILE_UPLOAD, size=16, color=Colors.GOLD),
+                UI.icon("SVGs/noun-download-5441865.svg", size=16),
                 ft.Text("Export", size=12, color=Colors.GOLD),
             ], spacing=6),
             on_click=self._on_export_glossary_click,

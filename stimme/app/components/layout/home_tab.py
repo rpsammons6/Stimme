@@ -48,17 +48,17 @@ class HomeTab:
             height=36, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
         )
         self.upload_btn = ft.OutlinedButton(
-            content=ft.Row([ft.Icon(ft.Icons.UPLOAD_FILE, size=20), ft.Text("Upload", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
+            content=ft.Row([UI.icon("SVGs/noun-open-folder-5441848.svg", 20), ft.Text("Upload", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
             on_click=self.on_upload,
             height=36, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
         )
         self.export_btn = ft.OutlinedButton(
-            content=ft.Row([UI.icon("icon-export.svg", 20), ft.Text("Export", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
+            content=ft.Row([UI.icon("SVGs/noun-download-5441865.svg", 20), ft.Text("Export", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
             on_click=self.on_export,
             height=36, style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=6)),
         )
         self.history_btn = ft.TextButton(
-            content=ft.Row([UI.icon("icon-scroll.svg", 24), ft.Text("History", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
+            content=ft.Row([UI.icon("SVGs/noun-history-5527397.svg", 24), ft.Text("History", font_family=Fonts.FRAKTUR, size=14)], spacing=8),
             on_click=self.on_history, height=36,
         )
 
@@ -83,21 +83,11 @@ class HomeTab:
             if self.bus:
                 self.bus.show_banner(msg, is_error=is_error)
             else:
-                # Fallback: direct page banner
-                if self.page.banner:
-                    self.page.banner.open = False
-                    self.page.update()
-                color = Colors.DESTRUCTIVE_FOREGROUND if is_error else Colors.BACKGROUND
-                bg = Colors.DESTRUCTIVE if is_error else Colors.GOLD
-                self.page.banner = ft.Banner(
-                    content=ft.Text(msg, color=color, size=14, selectable=True),
-                    actions=[ft.TextButton(
-                        content=ft.Text("OK", font_family=Fonts.FRAKTUR),
-                        on_click=lambda _: self._close_banner(),
-                    )],
-                    bgcolor=bg, open=True,
+                # DEPRECATED: EventBus should always be available.
+                _log(
+                    "DEPRECATED: _show_banner fallback called but EventBus is "
+                    "not available. page.banner is no longer used."
                 )
-                self.page.update()
         except Exception:
             _log(f"ERROR in _show_banner:\n{traceback.format_exc()}")
 
@@ -106,8 +96,11 @@ class HomeTab:
             if self.bus:
                 self.bus.close_banner()
             else:
-                self.page.banner.open = False
-                self.page.update()
+                # DEPRECATED: EventBus should always be available.
+                _log(
+                    "DEPRECATED: _close_banner fallback called but EventBus is "
+                    "not available. page.banner is no longer used."
+                )
         except Exception:
             pass
 
@@ -165,6 +158,9 @@ class HomeTab:
                         if commentary:
                             self.center_panel.set_commentary(commentary)
                         self._show_banner("Translation Complete")
+                        # Emit translation_complete event for ResourceReaper integration
+                        if self.bus:
+                            self.bus.emit("translation_complete")
                     else:
                         _log(f"Translation failed: {translation}")
                         self._show_banner(translation, is_error=True)

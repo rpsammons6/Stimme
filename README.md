@@ -2,7 +2,23 @@
 
 A desktop application for high-register German-to-English translation, built for scholars working with historical and philosophical texts. Stimme uses Anthropic's Claude API for translation synthesis, ONNX Runtime for lightweight ML inference (semantic search, emotion analysis), and a LanceDB vector store for RAG-enhanced scholarly context.
 
-## What's New (v1.1)
+## What's New (v1.12)
+
+This version adds key features from Phase 2 and Phase 3 of the development roadmap:
+
+- **Preferences Menu** You can now modify preferences within that menu. Changes appear in a universal and modular .json file. Much of it is still being linked to the backend, and so only a few of the settings actually work.
+
+- **Global Menu Bar** You can now add, modify, and save documents from a bar located at the top of the software interface.
+
+- **Tooltips** Basic QOL feature
+
+- **Global Reaper Tool** Whenever a major action is performed (i.e. a translation) the Reaper (or Great Judge if you prefer) is called, and every open instance must give an account for why it's currently running, and if it can't the Reaper will kill the instance to maintain minimal RAM and CPU usage. 
+
+- **New Icons** New icons by Rutmer Zijlstra from the Noun Project have been added. Legacy icons are still within the assets folder until all icon cases are covered.
+
+- **Bootstrapper** Added bootstrapper for easier app access and portability. Running the .bat file will automatically install the necessary dependencies. Check the README below for more details.
+
+## Previous Release (v1.1)
 
 This release completes Phase 1 of the development roadmap:
 
@@ -17,32 +33,42 @@ This release completes Phase 1 of the development roadmap:
 ## Quick Start
 
 ### Prerequisites
-- Python 3.9+
+- Python 3.11+ (download from [python.org](https://python.org))
 - Claude API key from [Anthropic](https://console.anthropic.com/)
 - Tesseract OCR + Poppler (optional, for scanned PDF processing)
 
-### Installation
+### Launch (Windows)
+
+```
+git clone https://github.com/rpsammons6/Stimme.git
+```
+
+Then double-click `stimme/run.bat`. On first run it will:
+1. Verify Python 3.11+ is installed
+2. Create a local `.venv` environment
+3. Install all dependencies from `requirements.txt`
+4. Launch Stimme (no console window)
+
+Subsequent launches skip setup and open instantly.
+
+### Launch (Manual / macOS / Linux)
 
 ```bash
-git clone https://github.com/rpsammons6/Stimme.git
 cd Stimme/stimme
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+python main.py
 ```
 
 ### Configuration
 
-```bash
-cp .env.example .env
-# Edit .env and add your CLAUDE_API_KEY
-# (or enter it in the app sidebar — it will be stored in your OS keyring)
+On first launch, enter your Claude API key in the app sidebar. It will be stored securely in your OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service).
+
+Alternatively, create a `.env` file in the `stimme/` directory:
+
 ```
-
-### Launch
-
-```bash
-python main.py
+CLAUDE_API_KEY=sk-ant-...
 ```
 
 ## Features

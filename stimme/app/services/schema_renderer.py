@@ -391,19 +391,50 @@ class SchemaRenderer:
         # Clamp current value to valid range
         current = max(min_val, min(max_val, current))
 
-        value_text = ft.Text(
-            str(round(current, 2)),
-            size=12,
-            font_family=Fonts.MONO,
+        # Editable value display — click to type, shows live value while sliding
+        value_field = ft.TextField(
+            value=str(round(current, 2)),
+            text_size=12,
+            text_style=ft.TextStyle(font_family=Fonts.MONO),
             color=Colors.FOREGROUND,
-            width=60,
+            width=64,
             text_align=ft.TextAlign.RIGHT,
+            content_padding=ft.padding.symmetric(horizontal=6, vertical=4),
+            border_color=Colors.DIVIDER,
+            focused_border_color=Colors.GOLD,
+            bgcolor=Colors.SURFACE,
+            border_radius=4,
+            dense=True,
         )
+
+        # Mutable ref so closures can share the slider instance
+        slider_ref: list[ft.Slider] = []
 
         def _on_slider_change(e: ft.ControlEvent) -> None:
             val = round(e.control.value, 2)
-            value_text.value = str(val)
+            value_field.value = str(val)
             on_change(setting_id, val)
+
+        def _on_field_submit(e: ft.ControlEvent) -> None:
+            """Validate typed value, clamp to range, sync slider."""
+            raw = value_field.value.strip()
+            try:
+                val = float(raw)
+            except (ValueError, TypeError):
+                # Revert to current slider value
+                val = slider_ref[0].value if slider_ref else current
+            # Clamp to valid range
+            val = max(min_val, min(max_val, val))
+            # Snap to step if step is defined
+            if step:
+                val = round(round((val - min_val) / step) * step + min_val, 2)
+            value_field.value = str(val)
+            if slider_ref:
+                slider_ref[0].value = val
+            on_change(setting_id, val)
+
+        value_field.on_submit = _on_field_submit
+        value_field.on_blur = _on_field_submit
 
         slider = ft.Slider(
             value=current,
@@ -415,9 +446,10 @@ class SchemaRenderer:
             inactive_color=Colors.SURFACE,
             expand=True,
         )
+        slider_ref.append(slider)
 
         return ft.Row(
-            controls=[slider, value_text],
+            controls=[slider, value_field],
             spacing=8,
             width=300,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,

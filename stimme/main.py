@@ -236,6 +236,11 @@ def setup_window_close_handling(page: ft.Page, app_shell: AppShell):
 def _safe_exit(page: ft.Page, app_shell: AppShell):
     """Clean up resources and destroy the window."""
     try:
+        app_shell._subprocess_runner.shutdown_all()
+    except Exception:
+        pass
+
+    try:
         app_shell.home_tab.cleanup()
     except Exception:
         pass

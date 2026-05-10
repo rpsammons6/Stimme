@@ -1,4 +1,4 @@
-import gc
+import atexit
 import math
 import flet as ft
 import threading
@@ -8,7 +8,6 @@ from app.components.layout.sidebar import Sidebar
 from app.components.layout.menu_bar import MenuBarComponent
 from app.components.layout.home_tab import HomeTab
 from app.components.views.parallel_view import ParallelView
-from app.components.views.pdf_viewer import WebView_PDF_Viewer
 from app.components.views.glossary.glossary_tab_view import GlossaryTabView
 from app.state import AppState
 from app.services.configuration_service import ConfigurationService
@@ -23,8 +22,19 @@ from app.services.re_translation_engine import ReTranslationEngine
 from app.services.correction_service import CorrectionService
 from app.services.state_service import StateService
 from app.services.pdf_import import PDFImportService
+from app.services.subprocess_runner import SubprocessRunner
 from app.event_bus import EventBus
 from app.components.views.preferences_window import PreferencesWindow
+from app.components.shared.diagnostics_hud import DiagnosticsHUD
+from app.components.shared.banner_overlay import BannerOverlay
+from app.components.shared.eigenstimme_badge import EigenstimmeBadge
+from app.services.reaper import ResourceReaper
+from app.services.reaper.providers import (
+    PDFResourceProvider,
+    ModelResourceProvider,
+    CacheResourceProvider,
+    UIOverlayProvider,
+)
 
 
 def _log(msg):
@@ -32,13 +42,13 @@ def _log(msg):
 
 
 RAIL_SECTIONS: list[tuple[str, str, str]] = [
-    ("icon-monk.svg", "Model", "model"),
-    ("icon-quill.svg", "Scholar Mode", "scholar"),
-    ("icon-theme.svg", "Thematic Focus", "focus"),
-    ("icon-scroll.svg", "Export Directory", "export"),
-    ("icon-book-open.svg", "Datasets", "datasets"),
-    ("icon-book.svg", "Glossary", "glossary"),
-    ("icon-key.svg", "API Keys", "keys"),
+    ("SVGs/noun-apple-5527427.svg", "Model", "model"),
+    ("SVGs/noun-edit-5527393.svg", "Scholar Mode", "scholar"),
+    ("SVGs/noun-puzzle-5441853.svg", "Thematic Focus", "focus"),
+    ("SVGs/noun-folder-5441888.svg", "Export Directory", "export"),
+    ("SVGs/noun-database-5527402.svg", "Datasets", "datasets"),
+    ("SVGs/noun-book-5527435.svg", "Glossary", "glossary"),
+    ("SVGs/noun-key-5527436.svg", "API Keys", "keys"),
 ]
 
 
@@ -52,6 +62,13 @@ class AppShell:
         # Project root: stimme/ directory (where main.py lives)
         stimme_dir = Path(__file__).resolve().parent.parent
         self.settings = ConfigurationService(self.bus, stimme_dir=stimme_dir)
+
+        # Subprocess runner for memory-intensive tasks (benchmark, OCR)
+        self._subprocess_runner = SubprocessRunner(self.bus, self.settings)
+        atexit.register(self._subprocess_runner.shutdown_all)
+
+        # Wire SubprocessRunner into PDFImportService for OCR isolation
+        PDFImportService._subprocess_runner = self._subprocess_runner
 
         # State recovery service
         self.state_service = StateService(self.state, self.bus, stimme_dir)
@@ -161,6 +178,7 @@ class AppShell:
         self.actions["rebuild_tabs"] = self.rebuild_tabs
         self.actions["set_translate_busy"] = self._set_toolbar_translate_busy
         self.actions["export_picker"] = self.export_picker
+        self.actions["cancel_benchmark"] = lambda: self._subprocess_runner.cancel("benchmark")
 
         # 6. HITL services — created AFTER HomeTab so translation_service is available
         self.re_translation_engine = ReTranslationEngine(
@@ -174,6 +192,26 @@ class AppShell:
         self.actions["re_translation_engine"] = self.re_translation_engine
         self.actions["correction_service"] = None  # lazily resolved via _get_correction_service
         self.actions["settings"] = self.settings
+
+        # 6b. Resource Reaper — centralized cleanup service
+        pdf_provider = PDFResourceProvider()
+        self.reaper = ResourceReaper(
+            app_state=self.state,
+            bus=self.bus,
+            settings=self.settings,
+            page=self.page,
+        )
+        self.reaper.register_provider("pdf", pdf_provider)
+        self.reaper.register_provider("models", ModelResourceProvider(
+            self.home_tab.translation_service.brain._reaper
+        ))
+        self.reaper.register_provider("cache", CacheResourceProvider(self.state.version_store))
+        self.reaper.register_provider("overlay", UIOverlayProvider(self.page))
+        self.reaper.start_pressure_monitor()
+        atexit.register(self.reaper.stop)
+
+        # Pass pdf_provider via actions so CenterPanel can register viewers
+        self.actions["pdf_provider"] = pdf_provider
 
         # 7. EventBus listeners for bulk mode
         self.bus.on("book_detected", self._on_book_detected)
@@ -193,6 +231,19 @@ class AppShell:
         self.actions["open_preferences"] = self.preferences_window.open
         self.bus.on("translation_started", self.preferences_window.auto_save_and_close)
         self.page.on_keyboard_event = self._on_keyboard_event
+
+        # 9. Diagnostics HUD — toggled via settings
+        self.diagnostics_hud = DiagnosticsHUD(self.page, self.bus)
+        self.bus.set_update_latency_callback(self.diagnostics_hud.record_update_latency)
+        # Check if HUD should be visible on boot
+        if self.settings.get("diagnostics_hud", False):
+            self.diagnostics_hud.set_visible(True)
+
+        # 10. Eigenstimme badge — shows when local LLM mode is active
+        self.eigenstimme_badge = EigenstimmeBadge(
+            bus=self.bus,
+            initial_backend=self.settings.get_llm_backend(),
+        )
 
         self.rebuild_tabs()
         _log("Initialized")
@@ -313,7 +364,7 @@ class AppShell:
 
             export_dialog = ft.AlertDialog(
                 modal=True,
-                title=ft.Row([UI.icon("icon-export.svg", 24), ft.Text("Export Translations", font_family=Fonts.HEADER, size=20)], spacing=8),
+                title=ft.Row([UI.icon("SVGs/noun-download-5441865.svg", 24), ft.Text("Export Translations", font_family=Fonts.HEADER, size=20)], spacing=8),
                 content=ft.Container(width=500, padding=ft.padding.all(8), content=ft.Column([
                     ft.Text("Format", size=13, weight="bold", color=Colors.INK_MUTED), format_radio,
                     ft.Divider(color=Colors.DIVIDER),
@@ -339,10 +390,10 @@ class AppShell:
         try:
             _log("global_clear_pdf called")
             self.state.clear_pdf()
-            self.home_tab.center_panel.pdf_viewer.cleanup()
-            self.home_tab.center_panel.pdf_viewer = None
-            self.home_tab.center_panel.pdf_viewer = WebView_PDF_Viewer(self.page)
             self.home_tab.current_pdf_file = None
+            # Delegate cleanup to the Reaper — it will reconcile the now-orphaned
+            # PDF viewer via PDFResourceProvider on the next reap cycle.
+            self.reaper.reap("pdf_cleared")
             self.home_tab.center_panel.rebuild_tabs()
             self.bus.safe_update()
         except Exception:
@@ -354,25 +405,16 @@ class AppShell:
 
     def rebuild_tabs(self):
         try:
-            from app.mem_debug import log_mem, log_overlay, log_surviving_refs, log_ram
-
             # Cleanup previous ParallelView to release PDF data, FilePicker, etc.
             if self._active_parallel_view is not None:
-                log_ram("rebuild_tabs BEFORE cleanup")
-                log_mem("rebuild_tabs BEFORE cleanup")
-                log_overlay(self.page, "rebuild_tabs BEFORE cleanup")
                 self._active_parallel_view.cleanup()
                 self._active_parallel_view = None
-                gc.collect()   # first pass breaks reference cycles
-                gc.collect()   # second pass collects freed objects
-                log_ram("rebuild_tabs AFTER cleanup")
-                log_mem("rebuild_tabs AFTER cleanup")
-                log_overlay(self.page, "rebuild_tabs AFTER cleanup")
-                log_surviving_refs()
+                # Delegate GC and orphan reconciliation to the Reaper
+                self.reaper.reap("rebuild_tabs")
 
             tabs = []
             is_home = self.state.is_home_active and self._active_glossary_tab_index < 0
-            tabs.append(self._create_tab_header("Home", ft.Icons.HOME, is_home, lambda _: self.switch_to_home()))
+            tabs.append(self._create_tab_header("Home", UI.icon("SVGs/noun-home-5441835.svg", 16), is_home, lambda _: self.switch_to_home()))
             for i, trans in enumerate(self.state.translation_tabs):
                 is_active = (i == self.state.active_translation_index) and self._active_glossary_tab_index < 0
                 tabs.append(self._create_tab_header(
@@ -383,7 +425,7 @@ class AppShell:
             for gi, gtv in enumerate(self._glossary_tabs):
                 is_active = (gi == self._active_glossary_tab_index)
                 tabs.append(self._create_tab_header(
-                    gtv.get_tab_title(), ft.Icons.MENU_BOOK, is_active,
+                    gtv.get_tab_title(), UI.icon("SVGs/noun-book-5527435.svg", 16), is_active,
                     lambda e, idx=gi: self._switch_to_glossary_tab(idx),
                     closable=True, close_idx=-(gi + 1),
                 ))
@@ -411,8 +453,14 @@ class AppShell:
 
     def _create_tab_header(self, title, icon, is_active, on_click, closable=False, close_idx=None):
         display_title = title if len(title) <= 30 else title[:27] + "..."
+        # If icon is already a Control (e.g. ft.Image from UI.icon()), use it directly;
+        # otherwise wrap the string/enum in ft.Icon().
+        if isinstance(icon, ft.Control):
+            icon_control = icon
+        else:
+            icon_control = ft.Icon(icon, size=16, color=Colors.GOLD if is_active else Colors.INK_MUTED)
         controls = [
-            ft.Icon(icon, size=16, color=Colors.GOLD if is_active else Colors.INK_MUTED),
+            icon_control,
             ft.Text(display_title, size=13, color=Colors.INK if is_active else Colors.INK_MUTED, no_wrap=True),
         ]
         if closable:
@@ -437,14 +485,16 @@ class AppShell:
 
     def switch_to_translation(self, index):
         if 0 <= index < len(self.state.translation_tabs):
+            # Cancel benchmark subprocess if navigating away from log view
+            # Feature: subprocess-isolation, Requirements: 2.5
+            if self.state.show_logs:
+                self._subprocess_runner.cancel("benchmark")
             self.state.active_translation_index = index
             self._active_glossary_tab_index = -1
         self.rebuild_tabs()
 
     def close_translation_tab(self, index):
         try:
-            from app.mem_debug import log_ram
-            log_ram(f"close_translation_tab({index}) START")
             _log(f"close_translation_tab({index})")
 
             # Negative indices are glossary file tabs
@@ -453,12 +503,13 @@ class AppShell:
                 return
 
             self.state.close_translation_tab(index)
+            # Emit tab_closed event — the Reaper listens via EventBus
+            self.bus.emit("tab_closed", index=index)
             # If no translation tabs remain, clear the home-tab PDF viewer
             # so its base64 page data is released from RAM.
             if not self.state.has_translations:
                 self.global_clear_pdf()
             self.rebuild_tabs()
-            log_ram(f"close_translation_tab({index}) END")
         except Exception:
             _log(f"ERROR in close_translation_tab:\n{traceback.format_exc()}")
 
@@ -522,6 +573,10 @@ class AppShell:
         """Switch to a glossary file tab by its index."""
         try:
             if 0 <= glossary_index < len(self._glossary_tabs):
+                # Cancel benchmark subprocess if navigating away from log view
+                # Feature: subprocess-isolation, Requirements: 2.5
+                if self.state.show_logs:
+                    self._subprocess_runner.cancel("benchmark")
                 self._active_glossary_tab_index = glossary_index
                 self.rebuild_tabs()
         except Exception:
@@ -670,8 +725,71 @@ class AppShell:
                 self._menu_open_glossary()
             elif action == "file.save_glossary":
                 self._menu_save_glossary()
+            elif action == "scriptorium.health_check":
+                self._run_health_check_in_console()
+            elif action == "scriptorium.benchmark":
+                self._run_benchmark_in_console()
         except Exception:
             _log(f"ERROR in _on_menu_action({action}):\n{traceback.format_exc()}")
+
+    def _run_health_check_in_console(self):
+        """Open LogTab and run dependency health check in background."""
+        try:
+            _log("_run_health_check_in_console: starting log session")
+            self.home_tab.center_panel.start_log_session(title="Dependency Health Check")
+            log_cb = self.home_tab.center_panel.log_tab.append
+            done_cb = self.home_tab.center_panel.log_tab.mark_done
+            _log("_run_health_check_in_console: log session started, spawning worker")
+
+            def _worker():
+                _log("_run_health_check_in_console._worker: thread started")
+                try:
+                    self.home_tab.action_handler._do_run_dependency_check(log_callback=log_cb)
+                    _log("_run_health_check_in_console._worker: check completed")
+                except Exception as exc:
+                    _log(f"_run_health_check_in_console._worker: EXCEPTION: {exc}")
+                    log_cb(f"❌ Error: {exc}")
+                finally:
+                    _log("_run_health_check_in_console._worker: calling mark_done()")
+                    done_cb()
+                    _log("_run_health_check_in_console._worker: done")
+
+            threading.Thread(target=_worker, daemon=True).start()
+            _log("_run_health_check_in_console: worker thread spawned")
+        except Exception:
+            _log(f"ERROR in _run_health_check_in_console:\n{traceback.format_exc()}")
+
+    def _run_benchmark_in_console(self):
+        """Open LogTab and run performance benchmark in a subprocess.
+
+        Uses SubprocessRunner to spawn the benchmark in an isolated child
+        process. When the child exits, the OS reclaims all RAM (ONNX sessions,
+        embeddings, LanceDB) unconditionally.
+
+        Feature: subprocess-isolation
+        Requirements: 2.1, 2.2, 2.3, 2.6, 4.1, 4.4
+        """
+        try:
+            _log("_run_benchmark_in_console: starting log session")
+            self.home_tab.center_panel.start_log_session(title="Performance Benchmark")
+            log_tab = self.home_tab.center_panel.log_tab
+            _log("_run_benchmark_in_console: log session started, submitting to subprocess runner")
+
+            task_ctx = self._subprocess_runner.build_task_context()
+
+            from app.workers.benchmark_worker import run_benchmark
+
+            self._subprocess_runner.submit(
+                category="benchmark",
+                worker_target=run_benchmark,
+                worker_args=(task_ctx,),
+                on_output=lambda line: (log_tab.append(line), self.bus.safe_update()),
+                on_done=lambda result: (log_tab.mark_done(), self.bus.safe_update()),
+                on_error=lambda msg: (log_tab.append(f"❌ {msg}"), log_tab.mark_done(), self.bus.safe_update()),
+            )
+            _log("_run_benchmark_in_console: benchmark subprocess submitted")
+        except Exception:
+            _log(f"ERROR in _run_benchmark_in_console:\n{traceback.format_exc()}")
 
     def _menu_new_glossary(self):
         """Handle File → New Glossary menu action."""
@@ -1072,7 +1190,7 @@ class AppShell:
         """Build a single Rail_Row with icon, label, and chevron."""
         # Icon container: 48x48, always visible
         icon_container = ft.Container(
-            content=ft.Image(src=icon_asset, width=24, height=24),
+            content=UI.icon(icon_asset, 24),
             width=48,
             height=48,
             alignment=ft.alignment.center,
@@ -1178,7 +1296,7 @@ class AppShell:
 
         # Settings row: icon + label, on_click opens PreferencesWindow
         settings_icon_container = ft.Container(
-            content=ft.Image(src="icon-settings.svg", width=24, height=24),
+            content=UI.icon("SVGs/noun-settings-5527430.svg", 24),
             width=48,
             height=48,
             alignment=ft.alignment.center,
@@ -1373,9 +1491,18 @@ class AppShell:
             spacing=0,
         )
 
-        # Wrap in a Stack so the PreferencesWindow can float on top
+        # Banner overlay — floats below menu bar, above page content
+        self._banner_overlay = BannerOverlay(bus=self.bus)
+        self.bus.register_banner_overlay(self._banner_overlay)
+
+        # Wrap in a Stack so the PreferencesWindow and HUD can float on top
         self._root_stack = ft.Stack(
-            controls=[page_column],
+            controls=[
+                page_column,
+                self._banner_overlay.control,
+                self.eigenstimme_badge.control,
+                self.diagnostics_hud.control,
+            ],
             expand=True,
         )
         self.preferences_window.register_stack(self._root_stack)

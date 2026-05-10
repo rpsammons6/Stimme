@@ -96,8 +96,8 @@ class MenuBarComponent:
             content=self._menu_label("Scriptorium"),
             items=[
                 self._placeholder_item("Re-index Vector DB"),
-                self._placeholder_item("Run Health Check"),
-                self._placeholder_item("Benchmark Check"),
+                self._active_item("Run Health Check", on_click=self._emit("scriptorium.health_check")),
+                self._active_item("Benchmark Check", on_click=self._emit("scriptorium.benchmark")),
             ],
             **self._popup_style(),
         )

@@ -162,15 +162,45 @@ class Fonts:
     HEADER = "UnifrakturCook-Bold"      # For headers
 
 
+class ImgIcon:
+    """Renders an image asset as an icon (supports SVG, PNG, WebP).
+
+    SVGs are automatically tinted with ``Colors.PRIMARY`` so they adapt
+    to dark/light mode.  PNGs and WebPs render as-is.
+    """
+
+    def __init__(self, asset_name: str, width: int = 28, height: int = 28, color=None):
+        self.asset_name = asset_name
+        self.width = width
+        self.height = height
+        self.color = color
+
+    def build(self) -> ft.Image:
+        is_svg = self.asset_name.lower().endswith(".svg")
+        tint = self.color if self.color is not None else (Colors.PRIMARY if is_svg else None)
+        return ft.Image(
+            src=f"/{self.asset_name}",
+            width=self.width,
+            height=self.height,
+            fit=ft.ImageFit.CONTAIN,
+            color=tint,
+        )
+
+
 class UI:
     """Global UI Component Factory for Stimme"""
 
     @staticmethod
-    def icon(name, size=28):
-        from app.components.widgets.img_icon import ImgIcon
-        icon_component = ImgIcon(name, size, size).build()
-        if isinstance(icon_component, ft.Image):
-            icon_component.filter_quality = ft.FilterQuality.HIGH
+    def icon(name, size=28, color=None):
+        """Build a tinted SVG icon image.
+
+        Args:
+            name: Asset path relative to assets_dir (e.g. "SVGs/noun-home.svg").
+            size: Width and height in pixels.
+            color: Override tint color. Defaults to Colors.PRIMARY for SVGs.
+        """
+        icon_component = ImgIcon(name, size, size, color=color).build()
+        icon_component.filter_quality = ft.FilterQuality.HIGH
         return icon_component
 
     @staticmethod

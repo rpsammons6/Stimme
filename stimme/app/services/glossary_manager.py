@@ -1005,8 +1005,23 @@ class GlossaryManager:
             len(all_terms),
         )
 
-        # Format the prompt block
-        lines = ["--- MANDATORY TERMS (ALWAYS USE THESE EXACT TRANSLATIONS) ---"]
+        # Format the prompt block based on glossary override strength
+        strength = "strict"
+        if self._config_service is not None:
+            raw = self._config_service.get("glossary_override_strength", "Strict")
+            strength = raw.lower() if isinstance(raw, str) else "strict"
+
+        if strength == "preferred":
+            header = "--- PREFERRED TERMS (Use these translations unless context strongly suggests otherwise) ---"
+            footer = "--- END PREFERRED TERMS ---"
+        elif strength == "advisory":
+            header = "--- SUGGESTED TERMS (Consider these translations but use your best judgement) ---"
+            footer = "--- END SUGGESTED TERMS ---"
+        else:
+            header = "--- MANDATORY TERMS (ALWAYS USE THESE EXACT TRANSLATIONS) ---"
+            footer = "--- END MANDATORY TERMS ---"
+
+        lines = [header]
         for term in included:
             entry = f'"{term.german}" → "{term.context_target}"'
             if term.field_tag and term.field_tag != "N/A":
@@ -1014,7 +1029,7 @@ class GlossaryManager:
             if term.nuance_note and term.nuance_note != "N/A":
                 entry += f" — {term.nuance_note}"
             lines.append(entry)
-        lines.append("--- END MANDATORY TERMS ---")
+        lines.append(footer)
         return "\n".join(lines)
 
     def apply_journal_recovery(self, entries: list) -> None:

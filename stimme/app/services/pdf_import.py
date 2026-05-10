@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 import queue
 from pathlib import Path
@@ -14,25 +15,138 @@ class PDFImportService:
 
     _worker_pool = WorkerPool()
 
+    # SubprocessRunner instance — set by AppShell after construction.
+    # When set, extract_in_process() delegates to SubprocessRunner instead
+    # of the legacy WorkerPool.
+    _subprocess_runner = None
+
     @classmethod
     def extract_in_process(cls, task_type: str, file_path: str,
                            progress_callback=None, cancel_callback=None,
                            **kwargs) -> str:
         """Submit extraction to a child process. Returns extracted text.
 
-        Polls the worker queue from the calling thread (expected to be a
-        daemon thread in HomeTab) and forwards progress messages, handles
-        timeouts, and detects worker crashes.
+        Delegates to SubprocessRunner (if available) or falls back to the
+        legacy WorkerPool. The method blocks until extraction completes,
+        is cancelled, or times out (30-second inactivity timeout handled
+        by SubprocessRunner._poll_loop).
+
+        The public API is unchanged: callers pass task_type, file_path,
+        progress_callback, cancel_callback, and **kwargs as before.
+
+        Feature: subprocess-isolation
+        Requirements: 3.1, 6.2, 6.3
+        """
+        if cls._subprocess_runner is not None:
+            return cls._extract_via_subprocess(
+                task_type, file_path, progress_callback, cancel_callback, **kwargs
+            )
+        # Fallback to legacy WorkerPool if SubprocessRunner not configured
+        return cls._extract_via_worker_pool(
+            task_type, file_path, progress_callback, cancel_callback, **kwargs
+        )
+
+    @classmethod
+    def _extract_via_subprocess(cls, task_type: str, file_path: str,
+                                progress_callback=None, cancel_callback=None,
+                                **kwargs) -> str:
+        """Delegate extraction to SubprocessRunner with ocr_worker entry point.
+
+        Uses threading.Event to block the calling thread until the subprocess
+        completes (on_done), errors (on_error), or is cancelled. The 30-second
+        inactivity timeout is enforced by SubprocessRunner._poll_loop.
+        """
+        from app.workers.ocr_worker import run_extraction
+
+        runner = cls._subprocess_runner
+        done_event = threading.Event()
+
+        # Mutable containers for result/error from callbacks
+        result_holder: list = []
+        error_holder: list = []
+
+        # Build task context from the runner's config service
+        task_ctx = runner.build_task_context()
+
+        def on_output(line: str):
+            """Forward formatted progress lines to the caller's progress_callback.
+
+            SubprocessRunner formats PROGRESS messages as '[XX%] message'.
+            We parse them back to (message, progress) for the callback.
+            """
+            if progress_callback:
+                # Try to parse formatted progress: "[XX%] message" or "[X.X%] message"
+                if line.startswith("[") and "]" in line:
+                    bracket_end = line.index("]")
+                    pct_str = line[1:bracket_end].rstrip("%")
+                    message = line[bracket_end + 2:]  # skip "] "
+                    try:
+                        progress = float(pct_str)
+                        progress_callback(message, progress)
+                        return
+                    except ValueError:
+                        pass
+                # Fallback: pass line as message with 0 progress
+                progress_callback(line, 0)
+
+        def on_done(result_data: dict | None):
+            """Called when the child sends a RESULT message."""
+            text = result_data.get("text", "") if result_data else ""
+            result_holder.append(text)
+            done_event.set()
+
+        def on_error(error_msg: str):
+            """Called when the child sends an ERROR or times out."""
+            error_holder.append(error_msg)
+            done_event.set()
+
+        # Cancel any existing OCR task before submitting a new one
+        # (implements replace-PDF cancellation logic — Requirement 3.7)
+        if runner.is_running("ocr"):
+            runner.cancel("ocr")
+
+        # Submit to SubprocessRunner with category="ocr"
+        runner.submit(
+            category="ocr",
+            worker_target=run_extraction,
+            worker_args=(task_type, file_path, task_ctx),
+            on_output=on_output,
+            on_done=on_done,
+            on_error=on_error,
+        )
+
+        # Block until completion, checking cancel_callback periodically
+        while not done_event.is_set():
+            # Check caller's cancel callback every 200ms
+            if cancel_callback and cancel_callback():
+                runner.cancel("ocr")
+                raise RuntimeError("Extraction cancelled")
+            done_event.wait(timeout=0.2)
+
+        # Return result or raise error
+        if error_holder:
+            raise RuntimeError(error_holder[0])
+        if result_holder:
+            return result_holder[0]
+        return ""
+
+    @classmethod
+    def _extract_via_worker_pool(cls, task_type: str, file_path: str,
+                                 progress_callback=None, cancel_callback=None,
+                                 **kwargs) -> str:
+        """Legacy extraction path using WorkerPool (fallback).
+
+        Polls the worker queue from the calling thread and forwards progress
+        messages, handles timeouts, and detects worker crashes.
         """
         result_queue = cls._worker_pool.submit(task_type, file_path, **kwargs)
         last_message_time = time.monotonic()
         TIMEOUT_SECONDS = 30
 
         while True:
-            # --- crash detection (8.5) ---
+            # --- crash detection ---
             process = cls._worker_pool._active_process
             if process is not None and not process.is_alive():
-                # Process died — drain any remaining messages first
                 try:
                     msg = result_queue.get_nowait()
                 except queue.Empty:
@@ -41,14 +155,11 @@ class PDFImportService:
                         "Extraction worker process crashed unexpectedly"
                     )
                 else:
-                    # Got a message from the dead process — handle it below
                     pass
             else:
-                # --- poll queue with short timeout ---
                 try:
                     msg = result_queue.get(timeout=0.1)
                 except queue.Empty:
-                    # --- timeout detection (8.4) ---
                     if time.monotonic() - last_message_time > TIMEOUT_SECONDS:
                         cls._worker_pool.cancel()
                         raise RuntimeError(
@@ -56,7 +167,6 @@ class PDFImportService:
                         )
                     continue
 
-            # We have a message — reset the timeout clock
             last_message_time = time.monotonic()
 
             if msg.msg_type == ExtractionMessage.PROGRESS:

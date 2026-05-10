@@ -10,8 +10,9 @@ class LogTab:
 
     CURSOR = "█"
 
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page, title: str = "Translation Log"):
         self.page = page
+        self._title = title
         self._lines: list[str] = []
         self._done = False
 
@@ -44,7 +45,7 @@ class LogTab:
                         controls=[
                             ft.Container(expand=True),
                             ft.Text(
-                                "Translation Log",
+                                self._title,
                                 size=13,
                                 color=Colors.GOLD,
                                 font_family=Fonts.HEADER,

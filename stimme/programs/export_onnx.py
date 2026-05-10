@@ -54,6 +54,143 @@ def _quantize_model(onnx_path: str | Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Post-export validation
+# ---------------------------------------------------------------------------
+
+# Expected configuration for the embedding model (intfloat/multilingual-e5-small)
+_EXPECTED_EMBEDDING_CONFIG = {
+    "architectures": ["BertModel"],
+    "attention_probs_dropout_prob": 0.1,
+    "hidden_act": "gelu",
+    "hidden_dropout_prob": 0.1,
+    "hidden_size": 384,
+    "initializer_range": 0.02,
+    "intermediate_size": 1536,
+    "layer_norm_eps": 1e-12,
+    "max_position_embeddings": 512,
+    "model_type": "bert",
+    "num_attention_heads": 12,
+    "num_hidden_layers": 12,
+    "pad_token_id": 0,
+    "position_embedding_type": "absolute",
+    "tokenizer_class": "XLMRobertaTokenizer",
+    "type_vocab_size": 2,
+    "use_cache": True,
+    "vocab_size": 250037,
+}
+
+
+def _validate_exported_embedding_model(emb_dir: Path) -> None:
+    """Validate the exported ONNX embedding model matches the tokenizer vocab.
+
+    Checks:
+    1. The ONNX model can handle token IDs up to 250,036 (full XLM-RoBERTa range)
+    2. The onnx/config.json contains model_type="bert" and vocab_size=250037
+
+    Raises RuntimeError if validation fails.
+    """
+    import json as _json
+
+    import numpy as np
+    import onnxruntime as ort
+
+    onnx_dir = emb_dir / "onnx"
+    onnx_model_path: Path | None = None
+
+    # sentence-transformers may place the ONNX file in different locations.
+    # Check common paths in priority order.
+    candidates = [
+        onnx_dir / "model.onnx",
+        emb_dir / "model.onnx",
+        onnx_dir / "model_quantized.onnx",
+        emb_dir / "model_quantized.onnx",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            onnx_model_path = candidate
+            break
+
+    # Fallback: search recursively
+    if onnx_model_path is None:
+        for child in emb_dir.rglob("model.onnx"):
+            onnx_model_path = child
+            break
+    if onnx_model_path is None:
+        for child in emb_dir.rglob("model_quantized.onnx"):
+            onnx_model_path = child
+            break
+
+    if onnx_model_path is None:
+        raise RuntimeError(
+            "Post-export validation failed: no ONNX model file found in "
+            f"{emb_dir}. Export may have failed silently."
+        )
+
+    # --- Step 1: Verify ONNX model handles high token IDs ---
+    print("  🔍 Validating exported ONNX model …")
+
+    session = ort.InferenceSession(
+        str(onnx_model_path),
+        providers=["CPUExecutionProvider"],
+    )
+
+    # Create a test input with a high token ID (250000) to verify the
+    # embedding table covers the full XLM-RoBERTa vocabulary range.
+    high_token_id = 250000
+    test_input_ids = np.array([[0, high_token_id, 2]], dtype=np.int64)
+    test_attention_mask = np.array([[1, 1, 1]], dtype=np.int64)
+    test_token_type_ids = np.array([[0, 0, 0]], dtype=np.int64)
+
+    input_names = [inp.name for inp in session.get_inputs()]
+    feed = {"input_ids": test_input_ids, "attention_mask": test_attention_mask}
+    if "token_type_ids" in input_names:
+        feed["token_type_ids"] = test_token_type_ids
+
+    try:
+        outputs = session.run(None, feed)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Post-export validation failed: ONNX model cannot handle token ID "
+            f"{high_token_id}. The embedding table likely does not match the "
+            f"tokenizer vocabulary (expected 250,037 entries). Error: {exc}"
+        ) from exc
+
+    # Verify output shape — should produce embeddings with hidden_size=384
+    if outputs and outputs[0].shape[-1] != 384:
+        raise RuntimeError(
+            f"Post-export validation failed: expected hidden_size=384, "
+            f"got output shape {outputs[0].shape}."
+        )
+
+    print(f"  ✅ ONNX model handles token ID {high_token_id} correctly")
+
+    # --- Step 2: Verify/fix onnx/config.json ---
+    config_dir = onnx_model_path.parent
+    config_path = config_dir / "config.json"
+
+    config_valid = False
+    if config_path.is_file():
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = _json.load(f)
+
+        model_type = config.get("model_type")
+        vocab_size = config.get("vocab_size")
+
+        if model_type == "bert" and vocab_size == 250037:
+            config_valid = True
+            print("  ✅ onnx/config.json is correct (model_type=bert, vocab_size=250037)")
+
+    if not config_valid:
+        # Generate the correct config
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            _json.dump(_EXPECTED_EMBEDDING_CONFIG, f, indent=2, ensure_ascii=False)
+        print("  ⚠️  onnx/config.json was missing or incorrect — generated correct config")
+
+    print("  ✅ Post-export validation passed")
+
+
+# ---------------------------------------------------------------------------
 # Embedding export
 # ---------------------------------------------------------------------------
 
@@ -85,6 +222,9 @@ def export_embedding_model(models_dir: str | Path | None = None) -> None:
     # tokenizer.json, config.json, etc.
     model.save(str(emb_dir))
     print(f"  ✅ Saved ONNX embedding model → {emb_dir}")
+
+    # --- Post-export validation ---
+    _validate_exported_embedding_model(emb_dir)
 
     # Locate the exported model.onnx for quantization
     onnx_file = emb_dir / "model.onnx"

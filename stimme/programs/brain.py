@@ -161,7 +161,7 @@ class TranslationBrain:
                     text = fixed_text
                 except (UnicodeDecodeError, UnicodeEncodeError):
                     pass  # Keep original if fix fails
-        except:
+        except Exception:
             pass  # Keep original if any error occurs
         
         # Step 3: Unicode normalization (NFKC - Canonical Decomposition + Canonical Composition)
@@ -241,17 +241,6 @@ class TranslationBrain:
             return True
         
         return False
-        try:
-            self.db.open_table(table_name)
-            if table_name not in self.active_plugins:
-                self.active_plugins.append(table_name)
-            return True
-        except:
-            return False
-
-    def remove_plugin(self, table_name):
-        if table_name in self.active_plugins:
-            self.active_plugins.remove(table_name)
 
     def add_plugin(self, table_name):
         if self.db is None:
@@ -364,11 +353,14 @@ class TranslationBrain:
             self.client = anthropic.Anthropic(api_key=current_key)
             self._init_api_key = current_key
 
-    def translate(self, text, model_id="claude-sonnet-4-6", user_instructions="", provide_commentary=True, log_callback=None, cache_control=False, api_key=None, glossary_block: str = ""):
+    def translate(self, text, model_id="claude-sonnet-4-6", user_instructions="", provide_commentary=True, log_callback=None, cache_control=False, api_key=None, glossary_block: str = "", vad_settings: dict | None = None):
         """
         The main pipeline with comprehensive text sanitization and context management.
         log_callback: optional callable(str) that receives each log line in real time.
         api_key: explicit API key from the caller (sidebar). Falls back to env var.
+        vad_settings: optional dict with keys 'enabled', 'valence_multiplier',
+            'arousal_multiplier', 'dominance_multiplier'. When None, VAD is
+            included unscaled.
         """
         def _log(msg: str):
             print(msg)
@@ -401,19 +393,40 @@ class TranslationBrain:
 
         # --- STEP 3: UPDATED EMOTION ANALYSIS (ONNX RoBERTa) ---
         try:
+            # Full classification for logging
             results = self.emotion_provider.classify(text[:512], top_k=6)
-            # Log ALL 6 classes for diagnostics, but only use top 3 downstream
             all_emotions = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
             _log(f"🎭 BRAIN: Emotion breakdown (all 6): {', '.join(all_emotions)}")
-            results = results[:3]  # trim to top 3 for the prompt
+
+            # Compute VAD affective profile (weighted average over all classes)
+            vad = self.emotion_provider.get_affective_profile(text[:512])
+            primary_emotion = vad["primary_emotion"].upper()
+            _log(f"🎭 BRAIN: VAD raw — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f} | Primary: {primary_emotion}")
+
+            # Apply VAD multipliers from user settings
+            _vad_cfg = vad_settings or {}
+            vad_enabled = _vad_cfg.get("enabled", True)
+            if vad_enabled:
+                v_mult = _vad_cfg.get("valence_multiplier", 1.0)
+                a_mult = _vad_cfg.get("arousal_multiplier", 1.0)
+                d_mult = _vad_cfg.get("dominance_multiplier", 1.0)
+                vad["valence"] = min(round(vad["valence"] * v_mult, 3), 1.0)
+                vad["arousal"] = min(round(vad["arousal"] * a_mult, 3), 1.0)
+                vad["dominance"] = min(round(vad["dominance"] * d_mult, 3), 1.0)
+                _log(f"🎭 BRAIN: VAD scaled (×{v_mult}/{a_mult}/{d_mult}) — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}")
+
+            # Build emotion intel string for the prompt
+            results = results[:3]
             emotion_strings = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
-            primary_emotion = results[0]['label'].upper()
             emotion_intel = ", ".join(emotion_strings)
-            _log(f"🎭 BRAIN: Using top 3: {emotion_intel}")
+            if vad_enabled:
+                emotion_intel += f" [VAD: V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}]"
+            _log(f"🎭 BRAIN: Emotion intel: {emotion_intel}")
         except Exception as e:
             _log(f"⚠️  BRAIN: Emotion analysis failed: {e}")
             primary_emotion = "NEUTRAL"
             emotion_intel = "NEUTRAL"
+            vad = {"valence": 0.5, "arousal": 0.5, "dominance": 0.5, "primary_emotion": "neutral"}
 
         # Step 4: Get context with distance scoring
         context_str, has_relevant_context = self.get_context(text)
@@ -469,7 +482,8 @@ class TranslationBrain:
         metrics = {
             "input_tokens": in_t,
             "output_tokens": out_t,
-            "primary_emotion": primary_emotion, # Added to metrics!
+            "primary_emotion": primary_emotion,
+            "vad": vad,
             "estimated_cost": round(cost, 5),
             "model_used": model_id,
             "relevant_context_found": has_relevant_context,
@@ -485,7 +499,7 @@ class TranslationBrain:
                 translation = data.get('translation', "")
                 commentary = data.get('commentary', "") + multi_column_warning
                 return translation, commentary, metrics
-            except:
+            except Exception:
                 return raw_output, multi_column_warning, metrics
         else:
             return raw_output, None, metrics

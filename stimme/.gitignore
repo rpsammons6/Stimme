@@ -25,3 +25,6 @@ history/
 documentation/
 tests/
 Phases/
+glossaries/
+history.json
+history.json.bak

@@ -6,12 +6,12 @@
   "history_directory": "",
   "datasets_directory": "",
   "glossaries_directory": "",
-  "ui_language": "EN",
+  "ui_language": "English",
   "theme": "Dunkel",
-  "diagnostics_hud": false,
+  "diagnostics_hud": true,
   "console_log_enabled": false,
   "console_log_filter": [],
-  "api_key_source": "env_file",
+  "api_key_source": "os_keyring",
   "remember_api_key": true,
   "last_opened_pdf": "",
   "last_used_glossary": "",
@@ -19,7 +19,7 @@
   "window_width": 1200,
   "window_height": 800,
   "sidebar_visible": true,
-  "llm_backend": "cloud",
+  "llm_backend": false,
   "local_llm_endpoint": "http://localhost:11434",
   "local_llm_model": "llama3",
   "local_llm_timeout": 120,
@@ -38,5 +38,9 @@
     "corpus"
   ],
   "show_billing_info": false,
-  "model": "claude-sonnet-4-6"
+  "model": "claude-sonnet-4-6",
+  "active_glossaries": [
+    "C:\\Users\\psamm\\Gayshit\\Stimme\\stimme\\glossaries\\nietzsche_test.glossary"
+  ],
+  "scholar_mode": false
 }

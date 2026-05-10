@@ -97,6 +97,7 @@ PERSONA_SCHEMA: dict[str, tuple] = {
     "summary_length":             (int,   10,   10000, 200),
     # Glossary binding
     "glossary_path":              (str,   None, None, ""),
+    "glossary_override_strength": (str,   None, None, "strict"),
     # Scholar mode
     "scholar_mode":               (bool,  None, None, False),
     # Thematic focus

@@ -7,9 +7,15 @@ All UI state changes go through here. This prevents:
 - Orphaned controls from rebuild races
 """
 
+from __future__ import annotations
+
 import threading
+import time
 import traceback
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from app.components.shared.banner_overlay import BannerOverlay
 
 
 def _log(msg):
@@ -24,6 +30,12 @@ class EventBus:
         self._lock = threading.Lock()
         self._listeners: dict[str, list[Callable]] = {}
         self._dialog_stack: list = []
+        self._update_latency_cb: Callable[[float], None] | None = None
+        self._banner_overlay: BannerOverlay | None = None
+
+    def set_update_latency_callback(self, cb: Callable[[float], None] | None) -> None:
+        """Register a callback to receive page.update() latency in ms."""
+        self._update_latency_cb = cb
 
     # ------------------------------------------------------------------
     # Pub/Sub
@@ -56,7 +68,12 @@ class EventBus:
         """Call page.update() exactly once, thread-safe."""
         with self._lock:
             try:
+                t0 = time.perf_counter()
                 self.page.update()
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+                # Notify HUD if registered
+                if self._update_latency_cb:
+                    self._update_latency_cb(elapsed_ms)
             except Exception:
                 _log(f"ERROR in safe_update:\n{traceback.format_exc()}")
 
@@ -88,40 +105,59 @@ class EventBus:
                 _log(f"ERROR in close_dialog:\n{traceback.format_exc()}")
 
     # ------------------------------------------------------------------
+    # Banner overlay registration
+    # ------------------------------------------------------------------
+
+    def register_banner_overlay(self, overlay: "BannerOverlay") -> None:
+        """Called by Shell after constructing the overlay."""
+        self._banner_overlay = overlay
+
+    # ------------------------------------------------------------------
     # Banner management
     # ------------------------------------------------------------------
 
-    def show_banner(self, message: str, is_error: bool = False):
-        """Show a banner message. Closes any existing banner first."""
-        from app.theme import Colors, Fonts
-        import flet as ft
+    def show_banner(self, message: str, is_error: bool = False, detail: str | None = None) -> None:
+        """Show a banner message. Delegates to BannerOverlay if registered."""
         with self._lock:
             try:
-                # Close existing banner first so the new one actually renders
-                if self.page.banner:
-                    self.page.banner.open = False
+                if self._banner_overlay is not None:
+                    self._banner_overlay.show(message, is_error, detail)
                     self.page.update()
-
-                self.page.banner = ft.Banner(
-                    content=ft.Text(message, color=Colors.DESTRUCTIVE_FOREGROUND if is_error else Colors.BACKGROUND, size=14, selectable=True),
-                    actions=[ft.TextButton(
-                        content=ft.Text("OK", font_family=Fonts.FRAKTUR),
-                        on_click=lambda _: self.close_banner(),
-                        style=ft.ButtonStyle(color=Colors.BACKGROUND if not is_error else Colors.PRIMARY_FOREGROUND),
-                    )],
-                    bgcolor=Colors.DESTRUCTIVE if is_error else Colors.GOLD,
-                    open=True,
-                )
-                self.page.update()
+                else:
+                    _log("DEPRECATED: BannerOverlay not registered, falling back to _show_banner_legacy (no-op)")
+                    self._show_banner_legacy(message, is_error)
             except Exception:
                 _log(f"ERROR in show_banner:\n{traceback.format_exc()}")
 
-    def close_banner(self):
-        """Close the current banner."""
+    def close_banner(self) -> None:
+        """Close the current banner. Delegates to BannerOverlay if registered."""
         with self._lock:
             try:
-                if self.page.banner:
-                    self.page.banner.open = False
+                if self._banner_overlay is not None:
+                    # Inline the dismiss logic to avoid deadlock (dismiss calls safe_update
+                    # which would re-acquire _lock). We already hold the lock here.
+                    self._banner_overlay._cancel_timer()
+                    self._banner_overlay._container.visible = False
                     self.page.update()
+                else:
+                    _log(
+                        "DEPRECATED: close_banner called but BannerOverlay not "
+                        "registered. page.banner is no longer used. Ensure "
+                        "BannerOverlay is registered via register_banner_overlay()."
+                    )
             except Exception:
-                pass
+                _log(f"ERROR in close_banner:\n{traceback.format_exc()}")
+
+    def _show_banner_legacy(self, message: str, is_error: bool = False) -> None:
+        """Legacy fallback using page.banner (DEPRECATED — no-op).
+
+        This method is deprecated. The BannerOverlay should always be
+        registered before any banner calls are made. If you see the
+        deprecation warning in logs, ensure Shell wires up the overlay
+        during build().
+        """
+        _log(
+            "DEPRECATED: _show_banner_legacy called but page.banner is no "
+            "longer used. Ensure BannerOverlay is registered via "
+            "register_banner_overlay()."
+        )

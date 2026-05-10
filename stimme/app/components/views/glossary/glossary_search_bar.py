@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 
 import flet as ft
 
-from app.theme import Colors, Fonts
+from app.theme import Colors, Fonts, UI
 
 from .utils.fuzzy_search import fuzzy_filter
 from .utils.global_search import run_global_search
@@ -75,20 +75,25 @@ class GlossarySearchBar:
             height=40,
         )
 
-        search_btn = ft.IconButton(
-            icon=ft.Icons.SEARCH,
-            icon_color=Colors.GOLD,
+        search_btn = ft.Container(
+            content=UI.icon("SVGs/noun-search-5441837.svg", 20),
             tooltip="Search (Enter)",
             on_click=self._on_search_submit,
-            icon_size=20,
+            ink=True,
         )
 
         search_all_btn = ft.TextButton(
-            text="Search All",
-            icon=ft.Icons.TRAVEL_EXPLORE,
+            content=ft.Row(
+                [
+                    UI.icon("SVGs/noun-world-5441893.svg", 16),
+                    ft.Text("Search All", color=Colors.GOLD, size=13),
+                ],
+                spacing=6,
+                tight=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
             on_click=self._on_search_all,
             tooltip="Search across all glossary files",
-            style=ft.ButtonStyle(color=Colors.GOLD),
         )
 
         self._progress_text = ft.Text(

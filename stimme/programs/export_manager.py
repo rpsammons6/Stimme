@@ -116,13 +116,7 @@ class ExportManager:
         
         filepath = os.path.join(self.export_dir, filename)
         
-        # Use the existing formatter
-        try:
-            from formatter import get_styled_html
-            html_content = get_styled_html(translation, commentary)
-        except ImportError:
-            # Fallback HTML generation
-            html_content = self._generate_html(source_text, translation, commentary, metadata)
+        html_content = self._generate_html(source_text, translation, commentary, metadata)
         
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
