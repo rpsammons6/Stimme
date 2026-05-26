@@ -16,7 +16,7 @@ This version adds key features from Phase 2 and Phase 3 of the development roadm
 
 - **New Icons** New icons by Rutmer Zijlstra from the Noun Project have been added. Legacy icons are still within the assets folder until all icon cases are covered.
 
-- **Bootstrapper** Added bootstrapper for easier app access and portability. Running the .bat file will automatically install the necessary dependencies. Check the README below for more details.
+- **Bootstrapper** Still fixing bootstrapper. Run main.py in your IDE for now.
 
 ## Previous Release (v1.1)
 
