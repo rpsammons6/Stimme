@@ -36,8 +36,14 @@ exit /b 1
 
 :goodver
 
-:: 3. Create .venv if it doesn't exist
+:: 3. Create .venv if it doesn't exist or is broken
 if not exist ".venv\Scripts\python.exe" (
+    :: Remove partial .venv if it exists
+    if exist ".venv" (
+        echo  [SETUP] Removing broken .venv...
+        rmdir /s /q .venv
+    )
+
     echo.
     echo  [SETUP] Creating local environment...
     python -m venv .venv
@@ -61,6 +67,16 @@ if not exist ".venv\Scripts\python.exe" (
     echo.
 )
 
-:: 4. Launch Stimme (pythonw = no console window)
+:: 4. Launch Stimme
+::    Use python.exe (not pythonw) so errors are visible in the console.
+::    The console stays open until the app exits — if it closes instantly,
+::    check the error message above.
 echo  [SYSTEM] Launching Stimme...
-start "" .venv\Scripts\pythonw.exe main.py
+.venv\Scripts\python.exe main.py
+if %errorlevel% neq 0 (
+    echo.
+    echo  [ERROR] Stimme exited with an error (code %errorlevel%).
+    echo          Check the output above for details.
+    echo.
+    pause
+)

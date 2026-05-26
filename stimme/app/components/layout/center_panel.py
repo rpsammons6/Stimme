@@ -127,67 +127,49 @@ class CenterPanel:
     # ------------------------------------------------------------------
 
     def on_add_button_click(self, e):
+        """Open a folder picker starting in lancedb_vectors/ to select a dataset folder."""
         try:
-            # Guard: don't open if a dialog is already showing
-            if self.page.dialog and hasattr(self.page.dialog, 'open') and self.page.dialog.open:
-                _log("on_add_button_click skipped — dialog already open")
+            from pathlib import Path
+
+            lancedb_path = Path(__file__).parent.parent.parent.parent / "lancedb_vectors"
+            lancedb_path.mkdir(parents=True, exist_ok=True)
+
+            _log(f"Opening folder picker at: {lancedb_path}")
+
+            file_picker = ft.FilePicker(on_result=self._on_dataset_file_picked)
+            self.page.overlay.append(file_picker)
+            self.page.update()
+
+            file_picker.get_directory_path(
+                dialog_title="Select Dataset Folder",
+                initial_directory=str(lancedb_path),
+            )
+
+        except Exception:
+            _log(f"ERROR in on_add_button_click:\n{traceback.format_exc()}")
+
+    def _on_dataset_file_picked(self, e: ft.FilePickerResultEvent):
+        """Handle folder selected from the dataset folder picker."""
+        try:
+            if not e.path:
+                _log("Dataset folder picker cancelled")
                 return
 
             from pathlib import Path
-            lancedb_path = Path(__file__).parent.parent.parent / "lancedb_vectors"
-            available_datasets = []
-            if lancedb_path.exists():
-                for item in lancedb_path.iterdir():
-                    if item.is_dir() and item.suffix == ".lance":
-                        available_datasets.append(item.stem)
-                    elif item.is_file() and item.suffix == ".csv":
-                        available_datasets.append(item.stem)
-            _log(f"Datasets found at {lancedb_path}: {available_datasets}")
+            selected_path = Path(e.path)
+            dataset_name = selected_path.stem
+            _log(f"Dataset folder selected: {selected_path} (name: {dataset_name})")
 
-            if not available_datasets:
-                info_dialog = ft.AlertDialog(
-                    title=ft.Text("No Datasets"),
-                    content=ft.Text(f"No datasets found in:\n{lancedb_path}"),
-                    actions=[ft.TextButton(content=ft.Text("OK", font_family=Fonts.FRAKTUR), on_click=lambda e: self.close_dialog(info_dialog))],
-                )
-                self.page.dialog = info_dialog
-                info_dialog.open = True
-                self.page.update()
-                return
+            # Add selected folder name to active datasets via ConfigurationService API
+            if dataset_name:
+                self.settings.add_dataset(dataset_name)
 
-            current_datasets = set(self.settings.get_datasets())
-            dataset_checkboxes = [
-                ft.Checkbox(label=ds, value=ds in current_datasets, data=ds)
-                for ds in sorted(available_datasets)
-            ]
-
-            def on_apply(dialog_e):
-                try:
-                    selected = [cb.data for cb in dataset_checkboxes if cb.value]
-                    _log(f"Datasets selected: {selected}")
-                    self.settings.settings["datasets"] = selected
-                    self.settings.save_settings()
-                    self.rebuild_tabs()
-                    if self.sidebar:
-                        self.sidebar.update_datasets_display()
-                    picker_dialog.open = False
-                    self.page.update()
-                except Exception:
-                    _log(f"ERROR in dataset on_apply:\n{traceback.format_exc()}")
-
-            picker_dialog = ft.AlertDialog(
-                title=ft.Text("Select Datasets"),
-                content=ft.Column(dataset_checkboxes, tight=True, scroll=ft.ScrollMode.AUTO),
-                actions=[
-                    ft.TextButton(content=ft.Text("Cancel", font_family=Fonts.FRAKTUR), on_click=lambda e: self.close_dialog(picker_dialog)),
-                    ft.TextButton(content=ft.Text("Apply", font_family=Fonts.FRAKTUR), on_click=on_apply),
-                ],
-            )
-            self.page.dialog = picker_dialog
-            picker_dialog.open = True
+            self.rebuild_tabs()
+            if self.sidebar:
+                self.sidebar.update_datasets_display()
             self.page.update()
         except Exception:
-            _log(f"ERROR in on_add_button_click:\n{traceback.format_exc()}")
+            _log(f"ERROR in _on_dataset_file_picked:\n{traceback.format_exc()}")
 
     def update_datasets_display(self):
         try:

@@ -33,10 +33,7 @@
   "network_timeout": 30,
   "hotkey_map": {},
   "ram_budgets": {},
-  "active_datasets": [
-    "idioms",
-    "corpus"
-  ],
+  "active_datasets": [],
   "show_billing_info": false,
   "model": "claude-sonnet-4-6",
   "active_glossaries": [
