@@ -37,7 +37,7 @@ class LLMBackendRouter:
             if programs_dir not in sys.path:
                 sys.path.insert(0, programs_dir)
             from brain import TranslationBrain
-            self._brain = TranslationBrain()
+            self._brain = TranslationBrain(config_service=self.settings)
         return self._brain
 
     def _get_local(self):

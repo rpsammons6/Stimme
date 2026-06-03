@@ -35,6 +35,21 @@
               "config_layer": "global",
               "action": "import_language_pack",
               "style": "default"
+            },
+            {
+              "id": "source_language",
+              "label": "Change Target Language",
+              "type": "dropdown",
+              "config_layer": "global",
+              "options": [
+                "German", "Spanish", "French", "Italian", "Portuguese",
+                "Dutch", "Polish", "Russian", "Chinese", "Japanese",
+                "Korean", "Arabic", "Turkish", "Greek", "Latin",
+                "Swedish", "Norwegian", "Danish", "Finnish", "Czech",
+                "Hungarian", "Romanian", "Ukrainian", "Hebrew", "Hindi"
+              ],
+              "default": "German",
+              "help_text": "Source language for translation into English. The emotion model only supports German; other languages use neutral fallback."
             }
           ]
         },

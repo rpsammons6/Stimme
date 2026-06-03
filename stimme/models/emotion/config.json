@@ -11,22 +11,22 @@
   "hidden_dropout_prob": 0.1,
   "hidden_size": 768,
   "id2label": {
-    "0": "LABEL_0",
-    "1": "LABEL_1",
-    "2": "LABEL_2",
-    "3": "LABEL_3",
-    "4": "LABEL_4",
-    "5": "LABEL_5"
+    "0": "anger",
+    "1": "fear",
+    "2": "disgust",
+    "3": "sadness",
+    "4": "joy",
+    "5": "none of them"
   },
   "initializer_range": 0.02,
   "intermediate_size": 3072,
   "label2id": {
-    "LABEL_0": 0,
-    "LABEL_1": 1,
-    "LABEL_2": 2,
-    "LABEL_3": 3,
-    "LABEL_4": 4,
-    "LABEL_5": 5
+    "anger": 0,
+    "fear": 1,
+    "disgust": 2,
+    "sadness": 3,
+    "joy": 4,
+    "none of them": 5
   },
   "layer_norm_eps": 1e-05,
   "max_position_embeddings": 514,
@@ -36,9 +36,10 @@
   "output_past": true,
   "pad_token_id": 1,
   "position_embedding_type": "absolute",
-  "problem_type": "multi_label_classification",
+  "problem_type": "single_label_classification",
   "transformers_version": "4.57.6",
   "type_vocab_size": 1,
   "use_cache": true,
-  "vocab_size": 250002
+  "vocab_size": 250002,
+  "num_labels": 6
 }

@@ -1,0 +1,18 @@
+# Stimme - Required HuggingFace Models
+# These models must be exported to ONNX during the installer build process.
+# See stimme/programs/export_onnx.py for the export logic.
+
+## Emotion Model (6-class German emotion classification)
+visegradmedia-emotion/Emotion_RoBERTa_german6_v7
+  - Architecture: XLMRobertaForSequenceClassification
+  - Labels: anger, fear, disgust, sadness, joy, none of them (6 classes)
+  - Export: ORTModelForSequenceClassification.from_pretrained(export=True)
+  - Quantization: INT8 dynamic (QUInt8)
+  - Output dir: stimme/models/emotion/
+
+## Embedding Model (multilingual sentence embeddings)
+intfloat/multilingual-e5-small
+  - Architecture: BertModel (XLM-RoBERTa based, 384-dim output)
+  - Export: SentenceTransformer(backend="onnx")
+  - Quantization: INT8 dynamic (QUInt8)
+  - Output dir: stimme/models/embedding/onnx/

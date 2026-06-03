@@ -4,6 +4,7 @@
 .kiro/
 .pytest_cache/
 .venv/
+.export-venv/
 __pycache__/
 conftest.py
 dead-scripts.txt
@@ -11,4 +12,15 @@ data/
 history/
 lancedb_vectors/
 test_view.html
+
+# Runtime state files (regenerated on launch)
+stimme/history.json
+stimme/session_recovery.json
+stimme/config.json
+
+# ONNX models (large binaries, re-exported via export_onnx.py)
+stimme/models/emotion/*.onnx
+stimme/models/emotion/*.onnx.data
+stimme/models/embedding/onnx/*.onnx
+stimme/models/embedding/onnx/*.onnx.data
 

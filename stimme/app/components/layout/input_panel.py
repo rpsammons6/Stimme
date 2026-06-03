@@ -2,8 +2,9 @@ import flet as ft
 from app.theme import Colors, Fonts
 
 class InputPanel:
-    def __init__(self, workspace):
+    def __init__(self, workspace, settings=None):
         self.workspace = workspace
+        self.settings = settings
         self.page = None  # Set when build() is called via parent
         
         self.text_field = ft.TextField(
@@ -40,16 +41,18 @@ class InputPanel:
         )
         
         # Header with source label
+        self._source_label = ft.Text(
+            self._get_source_label(),
+            size=13,
+            color=Colors.INK_MUTED,
+            italic=True,
+            font_family=Fonts.SERIF
+        )
+        
         self.header = ft.Container(
             content=ft.Row(
                 controls=[
-                    ft.Text(
-                        "Quelle · German source",
-                        size=13,
-                        color=Colors.INK_MUTED,
-                        italic=True,
-                        font_family=Fonts.SERIF
-                    ),
+                    self._source_label,
                     ft.Container(expand=True),
                     self.char_count
                 ],
@@ -59,6 +62,22 @@ class InputPanel:
             border=ft.border.only(bottom=ft.BorderSide(1, Colors.DIVIDER))
         )
     
+    def _get_source_label(self) -> str:
+        """Build the source label using the configured language."""
+        lang = "German"
+        if self.settings:
+            lang = self.settings.get_source_language()
+        return f"Quelle · {lang} source"
+
+    def on_config_changed(self, key: str, value, **kwargs):
+        """React to language config changes and update the header label."""
+        if key == "source_language":
+            self._source_label.value = self._get_source_label()
+            try:
+                self._source_label.update()
+            except Exception:
+                pass
+
     def on_text_change(self, e):
         """Update character count, token estimate, and workspace state"""
         text = self.text_field.value or ""

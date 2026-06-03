@@ -102,6 +102,8 @@ PERSONA_SCHEMA: dict[str, tuple] = {
     "scholar_mode":               (bool,  None, None, False),
     # Thematic focus
     "thematic_focus":             (str,   None, None, ""),
+    # Source language override (persona can override global)
+    "source_language":            (str,   None, None, "German"),
 }
 
 

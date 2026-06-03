@@ -11,10 +11,13 @@ from onnx_providers import SessionReaper
 load_dotenv()
 
 class TranslationBrain:
-    def __init__(self):
+    def __init__(self, config_service=None):
         # Set up cross-platform paths
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.vectors_path = os.path.join(self.base_dir, "lancedb_vectors")
+        
+        # Injected configuration service (None for backward compatibility)
+        self._config = config_service
         
         # Ghost providers: lazy-loaded on first access (see @property accessors below)
         self._embed_model = None
@@ -43,22 +46,58 @@ class TranslationBrain:
         self._init_api_key = os.getenv("CLAUDE_API_KEY", "")
         self.client = anthropic.Anthropic(api_key=self._init_api_key) if self._init_api_key else None
         
-        self.system_instructions = """
+        # System instructions as a template with {source_language} placeholders
+        self._system_template = """
         You are a world-class Philologist and Translator. 
-        You specialize in historical, academic, and philosophical German.
+        You specialize in historical, academic, and philosophical {source_language}.
         
         RULES:
         1. OUTPUT ONLY MARKDOWN or JSON as requested.
         2. DO NOT include conversational filler.
         3. Prioritize the register and vocabulary found in the 'SPECIALIZED CONTEXT'.
         4. If the researcher provides a 'THEMATIC FOCUS', prioritize that interpretation.
-        5. If providing a technical 'terminus technicus', provide the English followed by German in [].
-        6. IGNORE obvious OCR noise, page numbers, margin artifacts, or line numbers. Focus only on the semantic German text.
-        7. If you encounter text fragments like "124/b" or similar artifacts mixed with German text, ignore them and translate only the meaningful German content.
-        8. Tone: Match the detected emotional signature of the German source.
+        5. If providing a technical 'terminus technicus', provide the English followed by {source_language} in [].
+        6. IGNORE obvious OCR noise, page numbers, margin artifacts, or line numbers. Focus only on the semantic {source_language} text.
+        7. If you encounter text fragments like "124/b" or similar artifacts mixed with {source_language} text, ignore them and translate only the meaningful {source_language} content.
+        8. Tone: Match the detected emotional signature of the {source_language} source.
         9. When USER CORRECTION context is present for similar passages, prefer the user's corrected translation style over general context.
         """
     
+    @property
+    def system_instructions(self):
+        """Backward-compatible accessor: formats the template with 'German' default.
+        
+        This property ensures existing code that reads self.system_instructions
+        continues to work until translate() is updated to use _build_system_instructions().
+        """
+        return self._system_template.format(source_language="German")
+
+    def _get_source_language(self) -> str:
+        """Read source language from config, defaulting to German."""
+        if self._config:
+            return self._config.get_source_language()
+        return "German"
+
+    def _build_system_instructions(self) -> str:
+        """Build system instructions with the configured source language."""
+        lang = self._get_source_language()
+        return self._system_template.format(source_language=lang)
+
+    def _should_run_emotion_model(self) -> bool:
+        """Determine if the emotion model should run (German only)."""
+        return self._get_source_language() == "German"
+
+    def _get_neutral_emotion_fallback(self) -> tuple[str, dict]:
+        """Return neutral emotion intel and VAD for non-German languages."""
+        emotion_intel = "NEUTRAL (language-specific emotion analysis unavailable)"
+        vad = {
+            "valence": 0.5,
+            "arousal": 0.5,
+            "dominance": 0.5,
+            "primary_emotion": "neutral",
+        }
+        return emotion_intel, vad
+
     @property
     def embed_model(self):
         """Lazily instantiate EmbeddingProvider on first access."""
@@ -392,41 +431,47 @@ class TranslationBrain:
             multi_column_warning = "\n\n**Note**: Multi-column PDF layout detected."
 
         # --- STEP 3: UPDATED EMOTION ANALYSIS (ONNX RoBERTa) ---
-        try:
-            # Full classification for logging
-            results = self.emotion_provider.classify(text[:512], top_k=6)
-            all_emotions = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
-            _log(f"🎭 BRAIN: Emotion breakdown (all 6): {', '.join(all_emotions)}")
+        if self._should_run_emotion_model():
+            try:
+                # Full classification for logging
+                results = self.emotion_provider.classify(text[:512], top_k=6)
+                all_emotions = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
+                _log(f"🎭 BRAIN: Emotion breakdown (all 6): {', '.join(all_emotions)}")
 
-            # Compute VAD affective profile (weighted average over all classes)
-            vad = self.emotion_provider.get_affective_profile(text[:512])
+                # Compute VAD affective profile (weighted average over all classes)
+                vad = self.emotion_provider.get_affective_profile(text[:512])
+                primary_emotion = vad["primary_emotion"].upper()
+                _log(f"🎭 BRAIN: VAD raw — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f} | Primary: {primary_emotion}")
+
+                # Apply VAD multipliers from user settings
+                _vad_cfg = vad_settings or {}
+                vad_enabled = _vad_cfg.get("enabled", True)
+                if vad_enabled:
+                    v_mult = _vad_cfg.get("valence_multiplier", 1.0)
+                    a_mult = _vad_cfg.get("arousal_multiplier", 1.0)
+                    d_mult = _vad_cfg.get("dominance_multiplier", 1.0)
+                    vad["valence"] = min(round(vad["valence"] * v_mult, 3), 1.0)
+                    vad["arousal"] = min(round(vad["arousal"] * a_mult, 3), 1.0)
+                    vad["dominance"] = min(round(vad["dominance"] * d_mult, 3), 1.0)
+                    _log(f"🎭 BRAIN: VAD scaled (×{v_mult}/{a_mult}/{d_mult}) — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}")
+
+                # Build emotion intel string for the prompt
+                results = results[:3]
+                emotion_strings = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
+                emotion_intel = ", ".join(emotion_strings)
+                if vad_enabled:
+                    emotion_intel += f" [VAD: V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}]"
+                _log(f"🎭 BRAIN: Emotion intel: {emotion_intel}")
+            except Exception as e:
+                _log(f"⚠️  BRAIN: Emotion analysis failed: {e}")
+                primary_emotion = "NEUTRAL"
+                emotion_intel = "NEUTRAL"
+                vad = {"valence": 0.5, "arousal": 0.5, "dominance": 0.5, "primary_emotion": "neutral"}
+        else:
+            lang = self._get_source_language()
+            print(f"ℹ️  BRAIN: Skipping emotion analysis (source language: {lang}, not German)")
+            emotion_intel, vad = self._get_neutral_emotion_fallback()
             primary_emotion = vad["primary_emotion"].upper()
-            _log(f"🎭 BRAIN: VAD raw — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f} | Primary: {primary_emotion}")
-
-            # Apply VAD multipliers from user settings
-            _vad_cfg = vad_settings or {}
-            vad_enabled = _vad_cfg.get("enabled", True)
-            if vad_enabled:
-                v_mult = _vad_cfg.get("valence_multiplier", 1.0)
-                a_mult = _vad_cfg.get("arousal_multiplier", 1.0)
-                d_mult = _vad_cfg.get("dominance_multiplier", 1.0)
-                vad["valence"] = min(round(vad["valence"] * v_mult, 3), 1.0)
-                vad["arousal"] = min(round(vad["arousal"] * a_mult, 3), 1.0)
-                vad["dominance"] = min(round(vad["dominance"] * d_mult, 3), 1.0)
-                _log(f"🎭 BRAIN: VAD scaled (×{v_mult}/{a_mult}/{d_mult}) — V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}")
-
-            # Build emotion intel string for the prompt
-            results = results[:3]
-            emotion_strings = [f"{r['label'].upper()} ({round(r['score']*100)}%)" for r in results]
-            emotion_intel = ", ".join(emotion_strings)
-            if vad_enabled:
-                emotion_intel += f" [VAD: V={vad['valence']:.2f} A={vad['arousal']:.2f} D={vad['dominance']:.2f}]"
-            _log(f"🎭 BRAIN: Emotion intel: {emotion_intel}")
-        except Exception as e:
-            _log(f"⚠️  BRAIN: Emotion analysis failed: {e}")
-            primary_emotion = "NEUTRAL"
-            emotion_intel = "NEUTRAL"
-            vad = {"valence": 0.5, "arousal": 0.5, "dominance": 0.5, "primary_emotion": "neutral"}
 
         # Step 4: Get context with distance scoring
         context_str, has_relevant_context = self.get_context(text)
@@ -444,7 +489,7 @@ class TranslationBrain:
         estimated_input_tokens = len(text) // 4 + len(context_str) // 4 + 500
         max_output_tokens = max(1000, 8000 if "opus" in model_id or "sonnet" in model_id else 4000)
         
-        system_prompt_text = self.system_instructions + "\n\n" + mode_instruction
+        system_prompt_text = self._build_system_instructions() + "\n\n" + mode_instruction
 
         # When cache_control is enabled (bulk mode), send system prompt as a
         # content-block list with cache_control so Anthropic caches it across
@@ -460,6 +505,7 @@ class TranslationBrain:
 
         # Inject glossary block before the rest of the user message
         glossary_prefix = f"{glossary_block}\n" if glossary_block else ""
+        source_lang = self._get_source_language()
 
         response = self.client.messages.create(
             model=model_id, 
@@ -467,7 +513,7 @@ class TranslationBrain:
             system=system_param,
             messages=[{
                 "role": "user", 
-                "content": f"{glossary_prefix}EMOTIONAL SIGNATURE: {emotion_intel}\nFOCUS: {user_instructions}\nCONTEXT:\n{context_str}\nTEXT:\n{text}"
+                "content": f"{glossary_prefix}EMOTIONAL SIGNATURE: {emotion_intel}\nFOCUS: {user_instructions}\nCONTEXT:\n{context_str}\n{source_lang} TEXT:\n{text}"
             }]
         )
 

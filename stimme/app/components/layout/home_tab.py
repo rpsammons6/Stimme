@@ -28,10 +28,14 @@ class HomeTab:
         self.translation_service = TranslationService(settings)
 
         # 2. Panels
-        self.input_panel = InputPanel(state)
+        self.input_panel = InputPanel(state, settings)
         self.center_panel = CenterPanel(page, settings, sidebar=None, state=state, actions=actions)
         self.loading_screen = LoadingScreen(page)
         self.library_view = LibraryView(page, bus, state, actions)
+
+        # Subscribe input panel to language changes
+        if bus:
+            bus.on("config_changed", self.input_panel.on_config_changed)
 
         # 3. Local UI state (not shared)
         self.current_pdf_file = None

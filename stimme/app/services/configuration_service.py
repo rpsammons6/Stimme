@@ -413,6 +413,23 @@ class ConfigurationService:
         """Set whether to remember API key."""
         self.set("remember_api_key", remember)
 
+    def get_source_language(self) -> str:
+        """Get the active source language for translation.
+
+        Resolution order: persona override → global config → default "German".
+        """
+        return self.get("source_language", "German")
+
+    def set_source_language(self, language: str) -> None:
+        """Set the source language for translation.
+
+        Persists to Global Foundation and emits config_changed event.
+
+        Args:
+            language: One of the supported language names (e.g. "Spanish", "French").
+        """
+        self.set("source_language", language)
+
     # ------------------------------------------------------------------
     # Static helpers (no instance required)
     # ------------------------------------------------------------------
